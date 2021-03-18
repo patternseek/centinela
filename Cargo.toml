@@ -1,0 +1,19 @@
+[package]
+name = "centinela"
+version = "0.1.0"
+authors = ["Tolan Blundell <tolan@patternseek.net>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+linemux = "0.1"
+tokio = { version = "0.2.4", features = ["full"] }
+regex = "1.4.4"
+futures = "0.3"
+glob = "0.3.0"
+serde = { version = "1.0.124", features = ["derive"] }
+serde_regex = "1.1.0"
+serde_yaml = "0.8.17"
+log = "0.4.14"
+chrono = { version = "0.4.19", features = ["serde"] }
