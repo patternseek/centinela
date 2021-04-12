@@ -94,7 +94,11 @@ mod lib {
                             .monitor_data
                             .insert(monitor_name.clone(), Default::default());
                     }
-                    // First pass the line in in case any previous events are waiting on subsequent lines
+                    // FIXME Want to pass the line the appropriate events that are awaiting responses here.
+                    // FIXME previously though i'd have to keep a list of those that are awaiting subsequent lines
+                    // FIXME but actually we're unlikely to keep more than 10? 30? 100? events per monitor, in which case
+                    // FIXME iterating them is trivial
+
                     // Pass the line to the monitor for testing and possibly processing
                     if let Some(ev) = monitor.handle_line(
                         &file_set_name,
