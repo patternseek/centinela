@@ -9,9 +9,9 @@ variables:
 
 build:
   stage: build
-  except:
-    - master
-  script: 
+  only:
+    - tags
+  script:
     - apt-get update -yq
     - apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
     - rustup target add x86_64-unknown-linux-musl
