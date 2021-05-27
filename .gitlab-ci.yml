@@ -19,7 +19,7 @@ build:
   artifacts:
     expire_in: 99 years
     paths:
-      - target/x86_64-unknown-linux-musl/release/potato
+      - target/x86_64-unknown-linux-musl/release/centinela
       
 cache:
   paths:
