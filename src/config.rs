@@ -10,7 +10,8 @@ pub fn load(config_path: String) -> Result<ConfigFile, Box<dyn Error>> {
     let mut file = File::open(config_path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
-    Ok(serde_yaml::from_str(&contents)?)
+    let res = serde_yaml::from_str(&contents)?;
+    Ok(res)
 }
 
 #[derive(Serialize, Deserialize)]

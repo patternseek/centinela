@@ -22,3 +22,4 @@ reqwest = { version = "0.11.3", features = ["blocking"] }
 async-trait = "0.1.50"
 structopt = "0.3.21"
 structopt-derive = "0.4.14"
+openssl = {version = "0.10", features = ["vendored"]}

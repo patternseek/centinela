@@ -8,6 +8,7 @@ use futures::future::{join_all, BoxFuture};
 use futures::prelude::*;
 use std::collections::HashMap;
 use std::error::Error;
+use std::process::exit;
 use structopt::*;
 
 // CLI argument config
@@ -27,8 +28,13 @@ struct Args {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let args = Args::from_args();
-
-    let config = config::load(args.config_file).expect("Couldn't parse config file");
+    let config = match config::load(args.config_file) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Error: {}", err);
+            exit(1);
+        }
+    };
 
     let mut filesets: HashMap<String, FileSet> = Default::default();
     for (fileset_name, fileset_conf) in config.file_sets {
@@ -42,7 +48,14 @@ async fn main() -> std::io::Result<()> {
         file_handler_futures.push(Box::pin(fut.boxed()));
     }
 
-    let _res = join_all(file_handler_futures).await;
+    let res = join_all(file_handler_futures).await;
+
+    res.iter().for_each(|res| match res {
+        Ok(_res) => (),
+        Err(err) => {
+            eprintln!("Error: {}", err);
+        }
+    });
 
     Ok(())
 }

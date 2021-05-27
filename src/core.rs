@@ -44,9 +44,15 @@ impl FileSet {
             Err(e) => return Err(Box::new(e)),
         };
         for glob in &self.config.file_globs {
-            for entry in glob_parser(&glob)
-                .unwrap_or_else(|_| panic!("Failed to read glob pattern: {}", glob))
-            {
+            let mut glob_entries = match glob_parser(&glob) {
+                Ok(entries) => entries,
+                Err(err) => {
+                    eprintln!("Couldn't parse glob {}. Error: {}", glob, err);
+                    exit(1);
+                }
+            };
+            let mut num_entries: i32 = 0;
+            for entry in &mut glob_entries {
                 match &entry {
                     Ok(path) => {
                         if let Err(e) = line_follower.add_file(path).await {
@@ -61,8 +67,14 @@ impl FileSet {
                         exit(1);
                     }
                 };
+                num_entries += 1;
+            }
+            if num_entries < 1 {
+                eprintln!("No files found matching glob {}", glob);
+                exit(1);
             }
         }
+
         for monitor in self.monitors.values() {
             // Calculate the number of previous lines to keep per file
             if let Some(keep) = monitor.config.keep_lines_before {
@@ -77,15 +89,26 @@ impl FileSet {
                 }
             }
         }
-
         self.line_handler(file_set_name, line_follower).await;
+
         Ok(())
     }
 
     /// Watch the lines generated for a set of files
     async fn line_handler(&mut self, file_set_name: &str, mut line_follower: MuxedLines) {
         // For each line received from a set of files
-        while let Ok(Some(line)) = line_follower.next_line().await {
+        loop {
+            let line = match line_follower.next_line().await {
+                Ok(Some(line)) => line,
+                Ok(None) => {
+                    eprintln!("No files added to file set follower: {}", file_set_name);
+                    exit(1);
+                }
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                    exit(1);
+                }
+            };
             // Check for monitor matches
             for (monitor_name, monitor) in &mut self.monitors {
                 // Initialise the data entry for this monitor if necessary
@@ -94,17 +117,14 @@ impl FileSet {
                     .monitor_data
                     .entry(monitor_name.into())
                     .or_insert_with(Default::default);
-
                 // Pass the line to the MonitorData in case there are previous events awaiting subsequent lines
                 monitor_data.receive_line(&line, line.source());
-
                 // Pass the line to the monitor for testing and possibly processing
                 if let Some(evlock) = monitor
                     .handle_line(&line, self.line_buffers_before.get(line.source()))
                     .await
                 {
                     monitor_data.receive_event(evlock, monitor.config.log_recent_events);
-                    //println!("Current data: {:#?}", &self.data);
                 };
             }
             self.buffer_line(&line);
