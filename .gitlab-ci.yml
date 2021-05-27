@@ -1,0 +1,30 @@
+image: 'rust:latest'
+
+stages:
+  - build
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/cargo
+  APT_CACHE_DIR: $CI_PROJECT_DIR/apt
+
+build:
+  stage: build
+  only:
+    - tags
+  script:
+    - apt-get update -yq
+    - apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
+    - rustup target add x86_64-unknown-linux-musl
+    - cargo build --target x86_64-unknown-linux-musl --release
+  artifacts:
+    expire_in: 99 years
+    paths:
+      - target/x86_64-unknown-linux-musl/release/potato
+      
+cache:
+  paths:
+    - apt/
+    - cargo/
+    - target/
+
+
