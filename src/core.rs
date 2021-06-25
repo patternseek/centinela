@@ -1,7 +1,7 @@
 use crate::config::{FileSetConfig, MonitorConfig, NotifierConfig};
 use crate::data::{FileSetData, LogLine, MonitorEvent};
 use crate::notifiers::{notify, Notifier, WebhookBackEnd};
-use glob::glob as glob_parser;
+use glob::{glob as glob_parser, Paths};
 use linemux::{Line, MuxedLines};
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
@@ -17,6 +17,8 @@ pub(crate) struct FileSet {
     pub(crate) max_lines_before: usize,
     pub(crate) max_lines_after: usize,
     pub(crate) data: FileSetData,
+    // This will potentially be for keeping track of changes to the set of files being monitored
+    //    pub(crate) files_by_glob: HashMap<String, Vec<PathBuf>>,
 }
 
 impl FileSet {
@@ -28,6 +30,7 @@ impl FileSet {
             max_lines_before: 0,
             max_lines_after: 0,
             data: Default::default(),
+            //files_by_glob: Default::default(),
         };
         for (monitor_name, monitor_config) in set.config.monitors.clone() {
             set.monitors.insert(
@@ -44,14 +47,9 @@ impl FileSet {
             Err(e) => return Err(Box::new(e)),
         };
         for glob in &self.config.file_globs {
-            let mut glob_entries = match glob_parser(&glob) {
-                Ok(entries) => entries,
-                Err(err) => {
-                    eprintln!("Couldn't parse glob {}. Error: {}", glob, err);
-                    exit(1);
-                }
-            };
-            let mut num_entries: i32 = 0;
+            let mut glob_entries = FileSet::get_glob_entries(&glob);
+            //let entries_list = self.files_by_glob.entry(glob.clone()).or_insert(Vec::new());
+            let mut num_entries = 0;
             for entry in &mut glob_entries {
                 match &entry {
                     Ok(path) => {
@@ -59,7 +57,10 @@ impl FileSet {
                             // Typically something like a file perm issue
                             eprintln!("File error for {:?} {}", &path, e);
                             exit(1);
-                        };
+                        }
+
+                        println!("Monitoring file {:?}", path);
+                        //entries_list.push(path.clone());
                     }
                     Err(e) => {
                         // Typically something like a directory perm issue
@@ -92,6 +93,17 @@ impl FileSet {
         self.line_handler(file_set_name, line_follower).await;
 
         Ok(())
+    }
+
+    fn get_glob_entries(glob: &&String) -> Paths {
+        let mut glob_entries = match glob_parser(&glob) {
+            Ok(entries) => entries,
+            Err(err) => {
+                eprintln!("Couldn't parse glob {}. Error: {}", glob, err);
+                exit(1);
+            }
+        };
+        glob_entries
     }
 
     /// Watch the lines generated for a set of files
