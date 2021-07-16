@@ -1,14 +1,17 @@
+use crate::core::{FileSetId, MonitorId};
+use crate::notifiers::{NotifierId, NotifierMessage};
 use chrono::{DateTime, Duration, Timelike, Utc};
 use linemux::Line;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Sub;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
+use tokio::sync::mpsc::{channel, Sender};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct FileSetData {
-    pub monitor_data: HashMap<String, MonitorData>,
+    pub monitor_data: HashMap<MonitorId, MonitorData>,
 }
 
 impl Default for FileSetData {
@@ -22,7 +25,7 @@ impl Default for FileSetData {
 #[derive(Serialize, Deserialize, Default, Debug)]
 pub struct MonitorData {
     pub counts: EventCounts,
-    pub recent_events: Vec<Arc<Mutex<MonitorEvent>>>,
+    pub recent_events: Vec<Arc<RwLock<MonitorEvent>>>,
 }
 
 impl MonitorData {
@@ -32,7 +35,7 @@ impl MonitorData {
         self.recent_events
             .iter_mut()
             // Get read locks
-            .map(|lock| lock.lock().expect("unpoisoned lock"))
+            .map(|lock| lock.write().expect("unpoisoned lock"))
             // Find events awaiting lines from this source
             .filter(|ev| ev.awaiting_lines > 0 && ev.awaiting_lines_from == source)
             .for_each(|mut ev| {
@@ -47,21 +50,53 @@ impl MonitorData {
     }
 
     /// A Monitor matched a line so we receive it for storage
-    pub(crate) fn receive_event(
+    pub(crate) async fn receive_event(
         &mut self,
-        evlock: Arc<Mutex<MonitorEvent>>,
+        ev: MonitorEvent,
         keep_num_events: Option<usize>,
+        notifier_ids: Option<Vec<NotifierId>>,
+        notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
     ) {
         let keep_num_events = match keep_num_events {
             None => 0,
             Some(keep_events) => {
                 // Store
-                self.recent_events.push(evlock);
+                self.recent_events.push(Arc::new(RwLock::new(ev)));
                 keep_events
             }
         };
         self.trim(keep_num_events);
         self.counts.increment();
+
+        // If there are notifiers...
+        if let Some(notifier_ids) = notifier_ids {
+            // Borrow ev back out of self.recent_events
+            let ev_arc_mut = self
+                .recent_events
+                .last()
+                .expect(
+                    "Unable to get last element in Monitor.recent_events despite just adding one.",
+                )
+                .clone();
+            std::thread::spawn(move || {
+                let mut done = false;
+                while !done {
+                    let ev = ev_arc_mut.read().expect("unpoisoned lock");
+                    if ev.awaiting_lines > 0 && ev.notify_by > chrono::Utc::now() {
+                        println!("Waiting for {} lines...", &ev.awaiting_lines);
+                        drop(ev);
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                    } else {
+                        let ev_clone = ev.clone();
+                        drop(ev);
+                        // Notify
+                        let _ = notifiers_tx
+                            .send(NotifierMessage::Notify(notifier_ids.clone(), ev_clone));
+                        done = true;
+                    }
+                }
+            });
+        }
     }
 
     /// Remove older events if we have more than keep_num_events
@@ -193,11 +228,12 @@ impl EventCounts {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MonitorEvent {
     pub lines: Vec<LogLine>,
     pub awaiting_lines: usize,
     pub awaiting_lines_from: PathBuf,
+    pub notify_by: DateTime<Utc>,
 }
 
 impl MonitorEvent {
@@ -229,4 +265,75 @@ impl ToString for LogLine {
     fn to_string(&self) -> String {
         self.date.to_string() + " " + self.line.as_str()
     }
+}
+
+// pub enum PeriodType {
+//     Seconds,
+//     Minutes,
+//     Hours,
+//     Days,
+//     Weeks,
+//     Months,
+//     Years,
+// }
+
+#[derive(Debug)]
+pub(crate) enum DataStoreMessage {
+    ReceiveLine(FileSetId, MonitorId, Line),
+    ReceiveEvent(
+        FileSetId,
+        MonitorId,
+        MonitorEvent,
+        Option<usize>,
+        Option<Vec<NotifierId>>,
+    ),
+    //GetCount(FileSetId, MonitorId, PeriodType),
+}
+
+pub(crate) fn start_task(
+    mut filesets_data: HashMap<FileSetId, FileSetData>,
+    notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
+) -> Sender<DataStoreMessage> {
+    let (tx, mut rx) = channel(32);
+    tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            match message {
+                DataStoreMessage::ReceiveLine(file_set_id, monitor_id, log_line) => {
+                    let monitor_data =
+                        fetch_monitor_data(&mut filesets_data, &file_set_id, &monitor_id);
+                    monitor_data.receive_line(&log_line, log_line.source());
+                }
+                DataStoreMessage::ReceiveEvent(
+                    file_set_id,
+                    monitor_id,
+                    ev,
+                    keep_num_events,
+                    notifier_ids,
+                ) => {
+                    let monitor_data =
+                        fetch_monitor_data(&mut filesets_data, &file_set_id, &monitor_id);
+                    let _ = monitor_data
+                        .receive_event(ev, keep_num_events, notifier_ids, notifiers_tx.clone())
+                        .await;
+                }
+            }
+            //notify(notifiers.get(notifier_id).expect("Invalid notifier ID"), ev);
+        }
+    });
+    tx
+}
+
+fn fetch_monitor_data<'a>(
+    filesets_data: &'a mut HashMap<String, FileSetData>,
+    file_set_id: &FileSetId,
+    monitor_id: &MonitorId,
+) -> &'a mut MonitorData {
+    let fs_data = filesets_data
+        .get_mut(file_set_id)
+        .expect("Invalid fileset ID in DataStoreMessage::StoreLine message");
+    let monitor_data = fs_data
+        .monitor_data
+        .get_mut(monitor_id)
+        .expect("Invalid monitor ID in DataStoreMessage::StoreLine message");
+    monitor_data
 }

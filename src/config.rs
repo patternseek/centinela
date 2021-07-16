@@ -1,3 +1,5 @@
+use crate::core::{FileSetId, MonitorId};
+use crate::notifiers::NotifierId;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -16,13 +18,15 @@ pub fn load(config_path: String) -> Result<ConfigFile, Box<dyn Error>> {
 
 #[derive(Serialize, Deserialize)]
 pub struct ConfigFile {
-    pub file_sets: HashMap<String, FileSetConfig>,
+    pub file_sets: HashMap<FileSetId, FileSetConfig>,
+    pub monitors: HashMap<MonitorId, MonitorConfig>,
+    pub notifiers: HashMap<NotifierId, NotifierConfig>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct FileSetConfig {
     pub file_globs: Vec<String>,
-    pub monitors: HashMap<String, MonitorConfig>,
+    pub monitor_notifier_sets: HashMap<MonitorId, Option<Vec<NotifierId>>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -33,7 +37,7 @@ pub struct MonitorConfig {
     pub keep_lines_before: Option<usize>,
     pub keep_lines_after: Option<usize>,
     pub log_counts: bool,
-    pub notifiers: Option<Vec<NotifierConfig>>,
+    pub max_wait_before_notify: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -47,5 +51,4 @@ pub struct WebhookNotifierConfig {
     pub(crate) url: Url,
     pub(crate) template: String,
     pub(crate) minimum_interval: Option<usize>,
-    pub(crate) wait_seconds_for_additional_lines: Option<usize>,
 }

@@ -1,47 +1,54 @@
-use crate::config::{FileSetConfig, MonitorConfig, NotifierConfig};
-use crate::data::{FileSetData, LogLine, MonitorEvent};
-use crate::notifiers::{notify, Notifier, WebhookBackEnd};
 use glob::{glob as glob_parser, Paths};
 use linemux::{Line, MuxedLines};
+
+use crate::config::{FileSetConfig, MonitorConfig};
+use crate::data::{DataStoreMessage, LogLine, MonitorEvent};
+use crate::notifiers::NotifierId;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::exit;
-use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
+use tokio::sync::mpsc::Sender;
+
+pub(crate) type FileSetId = String;
+
+pub(crate) type MonitorNotifierSet = HashMap<MonitorId, (Monitor, Option<Vec<NotifierId>>)>;
 
 pub(crate) struct FileSet {
     pub(crate) config: FileSetConfig,
-    pub(crate) monitors: HashMap<String, Monitor>,
+    pub(crate) monitor_notifier_sets: MonitorNotifierSet,
     pub(crate) line_buffers_before: HashMap<PathBuf, VecDeque<LogLine>>,
     pub(crate) max_lines_before: usize,
     pub(crate) max_lines_after: usize,
-    pub(crate) data: FileSetData,
     // This will potentially be for keeping track of changes to the set of files being monitored
     //    pub(crate) files_by_glob: HashMap<String, Vec<PathBuf>>,
 }
 
 impl FileSet {
-    pub(crate) fn new_from_config(config: FileSetConfig) -> FileSet {
+    pub(crate) fn new_from_config(
+        config: FileSetConfig,
+        monitors: &HashMap<MonitorId, Monitor>,
+    ) -> FileSet {
         let mut set = FileSet {
             config,
-            monitors: Default::default(),
+            monitor_notifier_sets: Default::default(),
             line_buffers_before: Default::default(),
             max_lines_before: 0,
             max_lines_after: 0,
-            data: Default::default(),
             //files_by_glob: Default::default(),
         };
-        for (monitor_name, monitor_config) in set.config.monitors.clone() {
-            set.monitors.insert(
-                monitor_name.clone(),
-                Monitor::new_from_config(monitor_config),
-            );
+        for (monitor_id, notifier_ids) in &set.config.monitor_notifier_sets {
+            let monitor = monitors
+                .get(monitor_id)
+                .expect("Invalid monitor ID in file_set config.")
+                .clone();
+            set.monitor_notifier_sets
+                .insert(monitor_id.clone(), (monitor, notifier_ids.clone()));
         }
         set
     }
 
-    pub async fn follow(&mut self, file_set_name: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn get_follower(&mut self) -> Result<MuxedLines, Box<dyn Error>> {
         let mut line_follower = match MuxedLines::new() {
             Ok(lf) => lf,
             Err(e) => return Err(Box::new(e)),
@@ -49,7 +56,7 @@ impl FileSet {
         for glob in &self.config.file_globs {
             let mut glob_entries = FileSet::get_glob_entries(&glob);
             //let entries_list = self.files_by_glob.entry(glob.clone()).or_insert(Vec::new());
-            let mut num_entries = 0;
+            let mut num_entries: i32 = 0;
             for entry in &mut glob_entries {
                 match &entry {
                     Ok(path) => {
@@ -76,7 +83,7 @@ impl FileSet {
             }
         }
 
-        for monitor in self.monitors.values() {
+        for (monitor, _notifiers) in self.monitor_notifier_sets.values() {
             // Calculate the number of previous lines to keep per file
             if let Some(keep) = monitor.config.keep_lines_before {
                 if keep > self.max_lines_before {
@@ -90,13 +97,11 @@ impl FileSet {
                 }
             }
         }
-        self.line_handler(file_set_name, line_follower).await;
-
-        Ok(())
+        Ok(line_follower)
     }
 
     fn get_glob_entries(glob: &&String) -> Paths {
-        let mut glob_entries = match glob_parser(&glob) {
+        let glob_entries = match glob_parser(&glob) {
             Ok(entries) => entries,
             Err(err) => {
                 eprintln!("Couldn't parse glob {}. Error: {}", glob, err);
@@ -107,13 +112,18 @@ impl FileSet {
     }
 
     /// Watch the lines generated for a set of files
-    async fn line_handler(&mut self, file_set_name: &str, mut line_follower: MuxedLines) {
+    pub(crate) async fn line_handler(
+        &mut self,
+        fileset_id: &FileSetId,
+        mut line_follower: MuxedLines,
+        data_store_tx: Sender<DataStoreMessage>,
+    ) {
         // For each line received from a set of files
         loop {
             let line = match line_follower.next_line().await {
                 Ok(Some(line)) => line,
                 Ok(None) => {
-                    eprintln!("No files added to file set follower: {}", file_set_name);
+                    eprintln!("No files added to file set follower: {}", fileset_id);
                     exit(1);
                 }
                 Err(err) => {
@@ -122,21 +132,29 @@ impl FileSet {
                 }
             };
             // Check for monitor matches
-            for (monitor_name, monitor) in &mut self.monitors {
-                // Initialise the data entry for this monitor if necessary
-                let monitor_data = self
-                    .data
-                    .monitor_data
-                    .entry(monitor_name.into())
-                    .or_insert_with(Default::default);
+            for (monitor_id, (monitor, notifier_ids)) in &mut self.monitor_notifier_sets {
                 // Pass the line to the MonitorData in case there are previous events awaiting subsequent lines
-                monitor_data.receive_line(&line, line.source());
+                let _ = data_store_tx
+                    .send(DataStoreMessage::ReceiveLine(
+                        fileset_id.clone(),
+                        monitor_id.clone(),
+                        line.clone(),
+                    ))
+                    .await;
                 // Pass the line to the monitor for testing and possibly processing
-                if let Some(evlock) = monitor
+                if let Some(ev) = monitor
                     .handle_line(&line, self.line_buffers_before.get(line.source()))
                     .await
                 {
-                    monitor_data.receive_event(evlock, monitor.config.log_recent_events);
+                    let _ = data_store_tx
+                        .send(DataStoreMessage::ReceiveEvent(
+                            fileset_id.clone(),
+                            monitor_id.clone(),
+                            ev,
+                            monitor.config.log_recent_events,
+                            notifier_ids.clone(),
+                        ))
+                        .await;
                 };
             }
             self.buffer_line(&line);
@@ -162,39 +180,27 @@ impl FileSet {
     }
 }
 
+pub(crate) type MonitorId = String;
+
+#[derive(Clone)]
 pub(crate) struct Monitor {
     pub(crate) config: MonitorConfig,
-    pub(crate) notifiers: Vec<Arc<RwLock<Notifier>>>,
+    pub(crate) notifiers: Vec<NotifierId>,
 }
 
 impl Monitor {
-    fn new_from_config(config: MonitorConfig) -> Monitor {
-        let mut mon = Monitor {
+    pub(crate) fn new_from_config(config: MonitorConfig) -> Monitor {
+        Monitor {
             config,
             notifiers: Default::default(),
-        };
-        if let Some(notifiers_config) = mon.config.notifiers.clone() {
-            for notifier_config in notifiers_config {
-                mon.notifiers.push(match &notifier_config {
-                    NotifierConfig::Webhook(wh_config) => Arc::new(RwLock::new(Notifier {
-                        config: notifier_config.clone(),
-                        back_end: Box::new(WebhookBackEnd {
-                            config: wh_config.clone(),
-                        }),
-                        last_notify: chrono::offset::Utc::now() - chrono::Duration::weeks(52),
-                        skipped_notifications: 0,
-                    })),
-                })
-            }
-        };
-        mon
+        }
     }
 
     async fn handle_line(
         &mut self,
         line: &Line,
         previous_lines: Option<&VecDeque<LogLine>>,
-    ) -> Option<Arc<Mutex<MonitorEvent>>> {
+    ) -> Option<MonitorEvent> {
         if self.config.regex.is_match(line.line()) {
             // Log line in question
             let log_line = LogLine {
@@ -220,20 +226,14 @@ impl Monitor {
             };
 
             // Create a new match event
-            let ev = Arc::new(Mutex::new(MonitorEvent {
+            let ev = MonitorEvent {
                 lines,
                 awaiting_lines: self.config.keep_lines_after.unwrap_or(0),
                 awaiting_lines_from: line.source().to_owned(),
-            }));
+                notify_by: chrono::offset::Utc::now()
+                    + chrono::Duration::seconds(self.config.max_wait_before_notify as i64),
+            };
             println!("Generated event for line {:#?}", &line);
-            // Notify
-            for notifier in &mut self.notifiers {
-                let ev_clone = ev.clone();
-                let notifier_clone = notifier.clone();
-                thread::spawn(|| {
-                    let _ = notify(notifier_clone, ev_clone);
-                });
-            }
             // Return
             Some(ev)
         } else {
