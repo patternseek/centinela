@@ -28,6 +28,7 @@ pub struct ConfigFile {
 #[derive(Serialize, Deserialize)]
 pub struct GlobalConfig {
     pub(crate) notifiers_for_files_last_seen: Vec<NotifierId>,
+    pub(crate) period_for_files_last_seen: usize,
 }
 
 #[derive(Serialize, Deserialize)]
