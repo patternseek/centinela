@@ -1,5 +1,6 @@
-use crate::core::{FileSetId, MonitorId};
-use crate::notifiers::NotifierId;
+use crate::fileset::FileSetId;
+use crate::monitor::MonitorId;
+use crate::notifier::NotifierId;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,9 +19,15 @@ pub fn load(config_path: String) -> Result<ConfigFile, Box<dyn Error>> {
 
 #[derive(Serialize, Deserialize)]
 pub struct ConfigFile {
+    pub global: GlobalConfig,
     pub file_sets: HashMap<FileSetId, FileSetConfig>,
     pub monitors: HashMap<MonitorId, MonitorConfig>,
     pub notifiers: HashMap<NotifierId, NotifierConfig>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct GlobalConfig {
+    pub(crate) notifiers_for_files_last_seen: Vec<NotifierId>,
 }
 
 #[derive(Serialize, Deserialize)]

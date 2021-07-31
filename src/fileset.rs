@@ -1,9 +1,14 @@
+use crate::config::FileSetConfig;
+use crate::data::{DataStoreMessage, LogLine};
+use crate::monitor::{Monitor, MonitorId};
+use crate::notifier::NotifierId;
+use core::default::Default;
+use core::option::Option;
+use core::option::Option::{None, Some};
+use core::result::Result;
+use core::result::Result::{Err, Ok};
 use glob::{glob as glob_parser, Paths};
 use linemux::{Line, MuxedLines};
-
-use crate::config::{FileSetConfig, MonitorConfig};
-use crate::data::{DataStoreMessage, LogLine, MonitorEvent};
-use crate::notifiers::NotifierId;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::path::PathBuf;
@@ -12,16 +17,14 @@ use tokio::sync::mpsc::Sender;
 
 pub(crate) type FileSetId = String;
 
-pub(crate) type MonitorNotifierSet = HashMap<MonitorId, (Monitor, Option<Vec<NotifierId>>)>;
+pub(crate) type MonitorToNotifiersRelation = HashMap<MonitorId, (Monitor, Option<Vec<NotifierId>>)>;
 
 pub(crate) struct FileSet {
     pub(crate) config: FileSetConfig,
-    pub(crate) monitor_notifier_sets: MonitorNotifierSet,
+    pub(crate) monitor_notifier_sets: MonitorToNotifiersRelation,
     pub(crate) line_buffers_before: HashMap<PathBuf, VecDeque<LogLine>>,
     pub(crate) max_lines_before: usize,
     pub(crate) max_lines_after: usize,
-    // This will potentially be for keeping track of changes to the set of files being monitored
-    //    pub(crate) files_by_glob: HashMap<String, Vec<PathBuf>>,
 }
 
 impl FileSet {
@@ -35,7 +38,6 @@ impl FileSet {
             line_buffers_before: Default::default(),
             max_lines_before: 0,
             max_lines_after: 0,
-            //files_by_glob: Default::default(),
         };
         for (monitor_id, notifier_ids) in &set.config.monitor_notifier_sets {
             let monitor = monitors
@@ -48,7 +50,7 @@ impl FileSet {
         set
     }
 
-    pub async fn get_follower(&mut self) -> Result<MuxedLines, Box<dyn Error>> {
+    pub(crate) async fn get_follower(&mut self) -> Result<MuxedLines, Box<dyn Error>> {
         let mut line_follower = match MuxedLines::new() {
             Ok(lf) => lf,
             Err(e) => return Err(Box::new(e)),
@@ -131,6 +133,15 @@ impl FileSet {
                     exit(1);
                 }
             };
+            // Keep track of when we last received a line from each file
+            let _ = data_store_tx
+                .send(DataStoreMessage::FileSeen(
+                    line.source()
+                        .to_str()
+                        .expect("Valid string as filename")
+                        .to_string(),
+                ))
+                .await;
             // Check for monitor matches
             for (monitor_id, (monitor, notifier_ids)) in &mut self.monitor_notifier_sets {
                 // Pass the line to the MonitorData in case there are previous events awaiting subsequent lines
@@ -176,68 +187,6 @@ impl FileSet {
             while buf.len() > self.max_lines_before {
                 buf.pop_front();
             }
-        }
-    }
-}
-
-pub(crate) type MonitorId = String;
-
-#[derive(Clone)]
-pub(crate) struct Monitor {
-    pub(crate) config: MonitorConfig,
-    pub(crate) notifiers: Vec<NotifierId>,
-}
-
-impl Monitor {
-    pub(crate) fn new_from_config(config: MonitorConfig) -> Monitor {
-        Monitor {
-            config,
-            notifiers: Default::default(),
-        }
-    }
-
-    async fn handle_line(
-        &mut self,
-        line: &Line,
-        previous_lines: Option<&VecDeque<LogLine>>,
-    ) -> Option<MonitorEvent> {
-        if self.config.regex.is_match(line.line()) {
-            // Log line in question
-            let log_line = LogLine {
-                date: chrono::offset::Utc::now(),
-                line: line.line().to_string(),
-                is_event_line: true,
-            };
-
-            // Get previous lines if appropriate
-            let lines = match self.config.keep_lines_before {
-                Some(keep_lines) => match previous_lines {
-                    Some(previous_lines) => {
-                        let mut subset = previous_lines
-                            .range((previous_lines.len() - keep_lines)..)
-                            .cloned()
-                            .collect::<Vec<LogLine>>();
-                        subset.push(log_line);
-                        subset
-                    }
-                    None => vec![log_line],
-                },
-                None => vec![log_line],
-            };
-
-            // Create a new match event
-            let ev = MonitorEvent {
-                lines,
-                awaiting_lines: self.config.keep_lines_after.unwrap_or(0),
-                awaiting_lines_from: line.source().to_owned(),
-                notify_by: chrono::offset::Utc::now()
-                    + chrono::Duration::seconds(self.config.max_wait_before_notify as i64),
-            };
-            println!("Generated event for line {:#?}", &line);
-            // Return
-            Some(ev)
-        } else {
-            None
         }
     }
 }
