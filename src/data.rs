@@ -1,5 +1,6 @@
-use crate::core::{FileSetId, MonitorId};
-use crate::notifiers::{NotifierId, NotifierMessage};
+use crate::fileset::FileSetId;
+use crate::monitor::MonitorId;
+use crate::notifier::{NotifierId, NotifierMessage};
 use chrono::{DateTime, Duration, Timelike, Utc};
 use linemux::Line;
 use serde::{Deserialize, Serialize};
@@ -45,7 +46,7 @@ impl MonitorData {
                     is_event_line: false,
                 });
                 ev.awaiting_lines -= 1;
-                println!("Received line from {:?}", source);
+                //println!("Received line from {:?}", source);
             });
     }
 
@@ -83,7 +84,7 @@ impl MonitorData {
                 while !done {
                     let ev = ev_arc_mut.read().expect("unpoisoned lock");
                     if ev.awaiting_lines > 0 && ev.notify_by > chrono::Utc::now() {
-                        println!("Waiting for {} lines...", &ev.awaiting_lines);
+                        //println!("Waiting for {} lines...", &ev.awaiting_lines);
                         drop(ev);
                         std::thread::sleep(std::time::Duration::from_secs(1));
                     } else {
@@ -91,7 +92,7 @@ impl MonitorData {
                         drop(ev);
                         // Notify
                         let _ = notifiers_tx
-                            .send(NotifierMessage::Notify(notifier_ids.clone(), ev_clone));
+                            .send(NotifierMessage::NotifyEvent(notifier_ids.clone(), ev_clone));
                         done = true;
                     }
                 }
@@ -287,11 +288,13 @@ pub(crate) enum DataStoreMessage {
         Option<usize>,
         Option<Vec<NotifierId>>,
     ),
-    //GetCount(FileSetId, MonitorId, PeriodType),
+    FileSeen(String),
+    NotifyFilesSeen(Vec<NotifierId>),
 }
 
 pub(crate) fn start_task(
     mut filesets_data: HashMap<FileSetId, FileSetData>,
+    mut files_last_seen_data: HashMap<String, DateTime<Utc>>,
     notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
 ) -> Sender<DataStoreMessage> {
     let (tx, mut rx) = channel(32);
@@ -316,8 +319,28 @@ pub(crate) fn start_task(
                         .receive_event(ev, keep_num_events, notifier_ids, notifiers_tx.clone())
                         .await;
                 }
+                DataStoreMessage::FileSeen(file_path) => {
+                    files_last_seen_data.insert(file_path, Utc::now());
+                }
+                DataStoreMessage::NotifyFilesSeen(notifier_ids) => {
+                    let _ = notifiers_tx.send(NotifierMessage::NotifyMessage(
+                        notifier_ids,
+                        "Files last seen: \n\n".to_string()
+                            + files_last_seen_data
+                                .iter()
+                                .map(|(k, v)| {
+                                    format!(
+                                        "{} : {}s ago",
+                                        k,
+                                        (Utc::now().time() - v.time()).num_seconds()
+                                    )
+                                    .to_string()
+                                })
+                                .fold(String::new(), |acc, line| acc + line.as_str())
+                                .as_str(),
+                    ));
+                }
             }
-            //notify(notifiers.get(notifier_id).expect("Invalid notifier ID"), ev);
         }
     });
     tx

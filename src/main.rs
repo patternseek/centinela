@@ -1,17 +1,22 @@
 mod config;
-mod core;
 mod data;
-mod notifiers;
+mod fileset;
+mod monitor;
+mod notifier;
 
 use crate::config::{ConfigFile, NotifierConfig};
-use crate::core::{FileSet, FileSetId, Monitor, MonitorId};
+use crate::data::DataStoreMessage;
 use crate::data::FileSetData;
-use crate::notifiers::{Notifier, NotifierId, WebhookBackEnd};
+use crate::fileset::{FileSet, FileSetId};
+use crate::monitor::{Monitor, MonitorId};
+use crate::notifier::{Notifier, NotifierId, WebhookBackEnd};
+use chrono::{DateTime, Utc};
 use futures::future::{join_all, BoxFuture};
 use linemux::MuxedLines;
 use std::collections::HashMap;
 use std::process::exit;
 use structopt::*;
+use tokio::time::{sleep, Duration};
 
 // CLI argument config
 #[derive(StructOpt, Debug)]
@@ -29,23 +34,46 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    // Parse CLI args
     let args = Args::from_args();
+
+    // Load conf
     let config = match config::load(args.config_file) {
         Ok(config) => config,
         Err(err) => {
-            eprintln!("Error: {}", err);
+            eprintln!("Error loading config: {}", err);
             exit(1);
         }
     };
 
+    let notifiers_for_files_last_seen = config.global.notifiers_for_files_last_seen.clone();
+
+    // Prep structs and data
     let (mut filesets, filesets_data, _monitors, notifiers) = pop_structs_from_config(config);
+    let files_last_seen_data: HashMap<String, DateTime<Utc>> = HashMap::new();
 
-    let notifiers_tx = notifiers::start_thread(notifiers);
+    // Start long-running threads and tasks
+    let notifiers_tx = notifier::start_thread(notifiers);
+    let data_store_tx = data::start_task(filesets_data, files_last_seen_data, notifiers_tx.clone());
 
-    let data_store_tx = data::start_task(filesets_data, notifiers_tx.clone());
+    // Timer task to send a summary of which files have been seen and when
+    let data_store_tx_for_timer = data_store_tx.clone();
+    tokio::spawn(async move {
+        // Wait before first send
+        sleep(Duration::from_secs(60)).await;
+        loop {
+            data_store_tx_for_timer
+                .send(DataStoreMessage::NotifyFilesSeen(
+                    notifiers_for_files_last_seen.clone(),
+                ))
+                .await
+                .expect("Datastore task not dead");
+            sleep(Duration::from_secs(60 * 60 * 24)).await;
+        }
+    });
 
+    // Follow the files matched by each FileSet
     let mut file_handler_futures: Vec<BoxFuture<()>> = Vec::new();
-
     for (fileset_id, file_set) in &mut filesets {
         let line_follower: MuxedLines = match file_set.get_follower().await {
             Ok(lf) => lf,
