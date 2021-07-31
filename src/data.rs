@@ -334,9 +334,8 @@ pub(crate) fn start_task(
                                         k,
                                         (Utc::now().time() - v.time()).num_seconds()
                                     )
-                                    .to_string()
                                 })
-                                .fold(String::new(), |acc, line| acc + line.as_str())
+                                .fold(String::new(), |acc, line| acc + line.as_str() + "\n")
                                 .as_str(),
                     ));
                 }
