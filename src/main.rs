@@ -47,6 +47,7 @@ async fn main() -> std::io::Result<()> {
     };
 
     let notifiers_for_files_last_seen = config.global.notifiers_for_files_last_seen.clone();
+    let period_for_files_last_seen = config.global.period_for_files_last_seen.clone();
 
     // Prep structs and data
     let (mut filesets, filesets_data, _monitors, notifiers) = pop_structs_from_config(config);
@@ -68,7 +69,7 @@ async fn main() -> std::io::Result<()> {
                 ))
                 .await
                 .expect("Datastore task not dead");
-            sleep(Duration::from_secs(60 * 60 * 24)).await;
+            sleep(Duration::from_secs(period_for_files_last_seen as u64)).await;
         }
     });
 
