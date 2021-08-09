@@ -85,6 +85,7 @@ impl FileSet {
             }
         }
 
+        // Some runtime configuration based on the monitors' settings
         for (monitor, _notifiers) in self.monitor_notifier_sets.values() {
             // Calculate the number of previous lines to keep per file
             if let Some(keep) = monitor.config.keep_lines_before {

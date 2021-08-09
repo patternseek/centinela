@@ -332,7 +332,7 @@ pub(crate) fn start_task(
                                     format!(
                                         "{} : {}s ago",
                                         k,
-                                        (Utc::now().time() - v.time()).num_seconds()
+                                        (Utc::now().timestamp() - v.timestamp())
                                     )
                                 })
                                 .fold(String::new(), |acc, line| acc + line.as_str() + "\n")
