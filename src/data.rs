@@ -10,17 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{channel, Sender};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct FileSetData {
     pub monitor_data: HashMap<MonitorId, MonitorData>,
-}
-
-impl Default for FileSetData {
-    fn default() -> Self {
-        FileSetData {
-            monitor_data: HashMap::new(),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -288,13 +280,13 @@ pub(crate) enum DataStoreMessage {
         Option<usize>,
         Option<Vec<NotifierId>>,
     ),
-    FileSeen(String),
+    FileSeen(FileSetId, String),
     NotifyFilesSeen(Vec<NotifierId>),
 }
 
 pub(crate) fn start_task(
     mut filesets_data: HashMap<FileSetId, FileSetData>,
-    mut files_last_seen_data: HashMap<String, DateTime<Utc>>,
+    mut files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>>,
     notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
 ) -> Sender<DataStoreMessage> {
     let (tx, mut rx) = channel(32);
@@ -319,25 +311,40 @@ pub(crate) fn start_task(
                         .receive_event(ev, keep_num_events, notifier_ids, notifiers_tx.clone())
                         .await;
                 }
-                DataStoreMessage::FileSeen(file_path) => {
-                    files_last_seen_data.insert(file_path, Utc::now());
+                DataStoreMessage::FileSeen(fileset_id, file_path) => {
+                    let inner = files_last_seen_data.entry(fileset_id).or_default();
+                    inner.insert(file_path, Utc::now());
                 }
                 DataStoreMessage::NotifyFilesSeen(notifier_ids) => {
-                    let _ = notifiers_tx.send(NotifierMessage::NotifyMessage(
-                        notifier_ids,
-                        "Files last seen: \n\n".to_string()
-                            + files_last_seen_data
-                                .iter()
-                                .map(|(k, v)| {
-                                    format!(
-                                        "{} : {}s ago",
-                                        k,
-                                        (Utc::now().timestamp() - v.timestamp())
-                                    )
-                                })
-                                .fold(String::new(), |acc, line| acc + line.as_str() + "\n")
-                                .as_str(),
-                    ));
+                    let message = "Files last seen: \n\n".to_string() + {
+                        files_last_seen_data
+                            .iter()
+                            .map(|(k, v)| {
+                                let mut inner_message_lines = v
+                                    .iter()
+                                    .map(|(inner_k, inner_v)| {
+                                        format!(
+                                            "\t{} : {}s ago",
+                                            inner_k,
+                                            (Utc::now().timestamp() - inner_v.timestamp())
+                                        )
+                                    })
+                                    .collect::<Vec<String>>();
+                                inner_message_lines.sort();
+                                format!(
+                                    "{}:\n{}",
+                                    k,
+                                    inner_message_lines.iter().fold(String::new(), |acc, line| {
+                                        acc + line.as_str() + "\n"
+                                    })
+                                )
+                            })
+                            .fold(String::new(), |acc, line| acc + line.as_str() + "\n")
+                            .as_str()
+                    };
+
+                    let _ =
+                        notifiers_tx.send(NotifierMessage::NotifyMessage(notifier_ids, message));
                 }
             }
         }

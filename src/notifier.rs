@@ -122,7 +122,7 @@ pub(crate) fn start_thread(
                     notify_event(
                         notifiers
                             .get_mut(notifier_id)
-                            .expect(format!("Invalid notifier ID {:?}", notifier_id).as_str()),
+                            .unwrap_or_else(|| panic!("Invalid notifier ID {:?}", notifier_id)),
                         &ev_clone,
                     );
                 }
@@ -131,7 +131,7 @@ pub(crate) fn start_thread(
                 for notifier_id in &notifier_ids {
                     notifiers
                         .get_mut(notifier_id)
-                        .expect(format!("Invalid notifier ID {:?}", notifier_id).as_str())
+                        .unwrap_or_else(|| panic!("Invalid notifier ID {:?}", notifier_id))
                         .back_end
                         .notify_message(&message);
                 }
