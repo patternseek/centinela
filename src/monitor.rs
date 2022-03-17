@@ -1,6 +1,6 @@
 use crate::config::MonitorConfig;
 use crate::data::{LogLine, MonitorEvent};
-use crate::notifier::NotifierId;
+// use crate::notifier::NotifierId;
 use linemux::Line;
 use std::collections::VecDeque;
 
@@ -9,14 +9,14 @@ pub(crate) type MonitorId = String;
 #[derive(Clone)]
 pub(crate) struct Monitor {
     pub(crate) config: MonitorConfig,
-    pub(crate) notifiers: Vec<NotifierId>,
+    // pub(crate) notifiers: Vec<NotifierId>,
 }
 
 impl Monitor {
     pub(crate) fn new_from_config(config: MonitorConfig) -> Monitor {
         Monitor {
             config,
-            notifiers: Default::default(),
+            // notifiers: Default::default(),
         }
     }
 
@@ -37,14 +37,19 @@ impl Monitor {
             let lines = match self.config.keep_lines_before {
                 Some(keep_lines) => match previous_lines {
                     Some(previous_lines) => {
+                        let range_start = if previous_lines.len() >= keep_lines {
+                            previous_lines.len() - keep_lines
+                        } else {
+                            previous_lines.len()
+                        };
                         let mut subset = previous_lines
-                            .range((previous_lines.len() - keep_lines)..)
+                            .range(range_start..)
                             .cloned()
                             .collect::<Vec<LogLine>>();
                         subset.push(log_line);
                         subset
                     }
-                    None => vec![log_line],
+                    _ => vec![log_line],
                 },
                 None => vec![log_line],
             };

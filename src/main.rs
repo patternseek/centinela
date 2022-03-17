@@ -47,11 +47,11 @@ async fn main() -> std::io::Result<()> {
     };
 
     let notifiers_for_files_last_seen = config.global.notifiers_for_files_last_seen.clone();
-    let period_for_files_last_seen = config.global.period_for_files_last_seen.clone();
+    let period_for_files_last_seen = config.global.period_for_files_last_seen;
 
     // Prep structs and data
     let (mut filesets, filesets_data, _monitors, notifiers) = pop_structs_from_config(config);
-    let files_last_seen_data: HashMap<String, DateTime<Utc>> = HashMap::new();
+    let files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>> = HashMap::new();
 
     // Start long-running threads and tasks
     let notifiers_tx = notifier::start_thread(notifiers);

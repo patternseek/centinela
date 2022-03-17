@@ -104,7 +104,7 @@ impl FileSet {
     }
 
     fn get_glob_entries(glob: &&String) -> Paths {
-        let glob_entries = match glob_parser(&glob) {
+        let glob_entries = match glob_parser(glob) {
             Ok(entries) => entries,
             Err(err) => {
                 eprintln!("Couldn't parse glob {}. Error: {}", glob, err);
@@ -137,6 +137,7 @@ impl FileSet {
             // Keep track of when we last received a line from each file
             let _ = data_store_tx
                 .send(DataStoreMessage::FileSeen(
+                    fileset_id.to_string(),
                     line.source()
                         .to_str()
                         .expect("Valid string as filename")
