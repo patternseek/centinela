@@ -232,18 +232,30 @@ pub struct MonitorEvent {
 impl MonitorEvent {
     /// Get all stored lines for this event as markdown, highlighting the line containing the event itself
     pub(crate) fn get_lines_as_markdown(&self) -> String {
-        self.lines
-            .clone()
-            .into_iter()
-            .map(|i| {
-                if i.is_event_line {
-                    "\n\n**".to_string() + i.to_string().as_str() + "**\n\n"
-                } else {
-                    i.to_string()
-                }
-            })
-            .collect::<Vec<String>>()
-            .join("\n")
+        "\n```".to_string()
+            + self
+                .lines
+                .clone()
+                .into_iter()
+                .map(|i| {
+                    if i.is_event_line {
+                        let wrap = String::from_utf8(vec![b'-'; i.to_string().len()])
+                            .expect("Failed to create wrapper text");
+                        "\n".to_string()
+                            + wrap.as_str()
+                            + "\n"
+                            + i.to_string().as_str()
+                            + "\n"
+                            + wrap.as_str()
+                            + "\n"
+                    } else {
+                        i.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("\n")
+                .as_str()
+            + "\n```\n"
     }
 }
 
