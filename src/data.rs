@@ -241,11 +241,11 @@ impl MonitorEvent {
                     if i.is_event_line {
                         let wrap = String::from_utf8(vec![
                             b'-';
-                            i.to_string()
-                                .split('\n')
-                                .max_by(|x, y| x.len().cmp(&y.len()))
-                                .expect("Expect entries to exist")
-                                .len()
+                            if i.to_string().len() < 100 {
+                                i.to_string().len()
+                            } else {
+                                100
+                            }
                         ])
                         .expect("Failed to create wrapper text");
                         "\n".to_string()
