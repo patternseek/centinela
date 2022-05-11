@@ -16,6 +16,7 @@ struct WebhookBody {
 pub(crate) enum NotifierMessage {
     NotifyEvent(Vec<NotifierId>, MonitorEvent),
     NotifyMessage(Vec<NotifierId>, String),
+    Shutdown,
 }
 
 pub(crate) struct Notifier {
@@ -113,9 +114,9 @@ fn skip_if_inside_minimum_interval(
 
 pub(crate) fn start_thread(
     mut notifiers: HashMap<NotifierId, Notifier>,
-) -> SyncSender<NotifierMessage> {
+) -> (SyncSender<NotifierMessage>, std::thread::JoinHandle<()>) {
     let (tx, rx): (SyncSender<NotifierMessage>, Receiver<NotifierMessage>) = sync_channel(32);
-    std::thread::spawn(move || loop {
+    let join_handle = std::thread::spawn(move || loop {
         match rx.recv().expect("channel not broken") {
             NotifierMessage::NotifyEvent(notifier_ids, ev_clone) => {
                 for notifier_id in &notifier_ids {
@@ -136,7 +137,8 @@ pub(crate) fn start_thread(
                         .notify_message(&message);
                 }
             }
+            NotifierMessage::Shutdown => break,
         }
     });
-    tx
+    (tx, join_handle)
 }

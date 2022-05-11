@@ -9,6 +9,7 @@ use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::RwLock as RwLock_Tokio;
 
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct FileSetData {
@@ -301,10 +302,11 @@ pub(crate) enum DataStoreMessage {
     ),
     FileSeen(FileSetId, String),
     NotifyFilesSeen(Vec<NotifierId>),
+    Shutdown,
 }
 
 pub(crate) fn start_task(
-    mut filesets_data: HashMap<FileSetId, FileSetData>,
+    filesets_data_rwlock: Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
     mut files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>>,
     notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
 ) -> Sender<DataStoreMessage> {
@@ -313,6 +315,7 @@ pub(crate) fn start_task(
         while let Some(message) = rx.recv().await {
             match message {
                 DataStoreMessage::ReceiveLine(file_set_id, monitor_id, log_line) => {
+                    let mut filesets_data = filesets_data_rwlock.write().await;
                     let monitor_data =
                         fetch_monitor_data(&mut filesets_data, &file_set_id, &monitor_id);
                     monitor_data.receive_line(&log_line, log_line.source());
@@ -324,6 +327,7 @@ pub(crate) fn start_task(
                     keep_num_events,
                     notifier_ids,
                 ) => {
+                    let mut filesets_data = filesets_data_rwlock.write().await;
                     let monitor_data =
                         fetch_monitor_data(&mut filesets_data, &file_set_id, &monitor_id);
                     let _ = monitor_data
@@ -365,6 +369,7 @@ pub(crate) fn start_task(
                     let _ =
                         notifiers_tx.send(NotifierMessage::NotifyMessage(notifier_ids, message));
                 }
+                DataStoreMessage::Shutdown => break,
             }
         }
     });
