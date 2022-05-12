@@ -40,7 +40,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    console_subscriber::init();
+    // console_subscriber::init();
 
     // Parse CLI args
     let args = Args::from_args();
@@ -96,32 +96,40 @@ async fn main() -> std::io::Result<()> {
         file_handler_txs.push(tx);
     }
 
+    let mut inter = signal(SignalKind::interrupt()).expect("couldn't listen for interrupt signal");
+    let mut term = signal(SignalKind::terminate()).expect("couldn't listen for terminate signal");
     tokio::select! {
-        _ = signal(SignalKind::interrupt())?.recv() => println!("SIGINT"),
-        _ = signal(SignalKind::terminate())?.recv() => println!("SIGTERM"),
-    }
+        _ = inter.recv() => {
+            println!("SIGINT");
+            // Shut down
+            println!("Shutting down");
 
-    let _res = join_all(file_handler_futures).await;
+            data_store_tx
+                .send(DataStoreMessage::Shutdown)
+                .await
+                .expect("Unable to send datastore task shutdown message");
+            println!("Shut down datastore task");
 
-    // Shut down
-    info!("Shutting down");
+            notifiers_tx
+                .send(NotifierMessage::Shutdown)
+                .expect("Unable to send notifier thread shutdown message");
+            notifier_join_handle
+                .join()
+                .expect("Failed to join notifier thread");
+            println!("Shut down notifier thread");
 
-    data_store_tx
-        .send(DataStoreMessage::Shutdown)
-        .await
-        .expect("Unable to send datastore task shutdown message");
-    info!("Shut down datastore task");
+            api_join_handle.join().expect("Failed to join API thread");
+            println!("Shut down API thread");
 
-    notifiers_tx
-        .send(NotifierMessage::Shutdown)
-        .expect("Unable to send notifier thread shutdown message");
-    notifier_join_handle
-        .join()
-        .expect("Failed to join notifier thread");
-    info!("Shut down notifier thread");
+            join_all(file_handler_futures);
+            println!("Shut down API thread");
 
-    api_join_handle.join().expect("Failed to join API thread");
-    info!("Shut down API thread");
+        },
+        _ = term.recv() => println!("SIGTERM"),
+        _ = join_all(file_handler_futures) => println!("JOINED ALL")
+    };
+
+    // let _res = .await;
 
     Ok(())
 }
