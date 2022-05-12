@@ -1,7 +1,8 @@
 use crate::fileset::FileSetId;
 use crate::monitor::MonitorId;
 use crate::notifier::{NotifierId, NotifierMessage};
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::offset::TimeZone;
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc, Weekday};
 use linemux::Line;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -189,34 +190,42 @@ impl EventCounts {
                 self.days.insert(days, 1);
             }
         };
-
-        let weeks = now.date().and_hms(now.hour(), 0, 0);
-        match self.weeks.get_mut(&weeks) {
+        println!(
+            "{} {} {}",
+            now.iso_week().week(),
+            now.year(),
+            Weekday::Mon.number_from_monday()
+        );
+        let week = Utc
+            .isoywd(now.year(), now.iso_week().week(), Weekday::Mon)
+            .and_hms(0, 0, 0);
+        match self.weeks.get_mut(&week) {
             Some(weeks_count) => {
                 *weeks_count += 1;
             }
             None => {
-                self.weeks.insert(weeks, 1);
+                self.weeks.insert(week, 1);
             }
         };
 
-        let months = now.date().and_hms(now.hour(), 0, 0);
-        match self.months.get_mut(&months) {
+        // let month = now.date().and_hms(now.hour(), 0, 0);
+        let month = Utc.ymd(now.year(), now.month(), 1).and_hms(0, 0, 0);
+        match self.months.get_mut(&month) {
             Some(months_count) => {
                 *months_count += 1;
             }
             None => {
-                self.months.insert(months, 1);
+                self.months.insert(month, 1);
             }
         };
 
-        let years = now.date().and_hms(now.hour(), 0, 0);
-        match self.years.get_mut(&years) {
+        let year = Utc.ymd(now.year(), 1, 1).and_hms(0, 0, 0);
+        match self.years.get_mut(&year) {
             Some(years_count) => {
                 *years_count += 1;
             }
             None => {
-                self.years.insert(years, 1);
+                self.years.insert(year, 1);
             }
         };
     }
