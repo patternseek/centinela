@@ -19,7 +19,7 @@ pub(crate) type FileSetId = String;
 
 pub(crate) type MonitorToNotifiersRelation = HashMap<MonitorId, (Monitor, Option<Vec<NotifierId>>)>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum LineHandlerMessage {
     Shutdown,
 }
@@ -129,14 +129,14 @@ impl FileSet {
     ) {
         // For each line received from a set of files
         loop {
-            match line_handler_rx.try_recv() {
-                Ok(msg) => match msg {
-                    LineHandlerMessage::Shutdown => {
+            tokio::select! {
+                msg_opt = line_handler_rx.recv() => {
+                    if  Some(LineHandlerMessage::Shutdown) == msg_opt {
                         break;
                     }
-                },
-                _ => {
-                    let line = match line_follower.next_line().await {
+                }
+                line_res = line_follower.next_line() => {
+                    let line = match line_res {
                         Ok(Some(line)) => line,
                         Ok(None) => {
                             eprintln!("No files added to file set follower: {}", fileset_id);

@@ -13,8 +13,7 @@ use crate::monitor::{Monitor, MonitorId};
 use crate::notifier::{Notifier, NotifierId, NotifierMessage, WebhookBackEnd};
 use chrono::{DateTime, Utc};
 use futures::future::{join_all, BoxFuture};
-use linemux::{Line, MuxedLines};
-use log::info;
+use linemux::MuxedLines;
 use std::collections::HashMap;
 use std::process::exit;
 use std::sync::Arc;
@@ -22,6 +21,7 @@ use structopt::*;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::RwLock as RwLock_Tokio;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
 // CLI argument config
@@ -73,7 +73,7 @@ async fn main() -> std::io::Result<()> {
     let api_join_handle = api::start_thread(filesets_data.clone());
 
     // Timer task to send a summary of which files have been seen and when
-    start_file_summary_timer_task(
+    let file_summary_timer_task_join_handle = start_file_summary_timer_task(
         notifiers_for_files_last_seen,
         period_for_files_last_seen,
         &data_store_tx,
@@ -96,41 +96,49 @@ async fn main() -> std::io::Result<()> {
         file_handler_txs.push(tx);
     }
 
+    // Handle signals
     let mut inter = signal(SignalKind::interrupt()).expect("couldn't listen for interrupt signal");
     let mut term = signal(SignalKind::terminate()).expect("couldn't listen for terminate signal");
+    let mut file_handlers_join_future = join_all(file_handler_futures);
     tokio::select! {
-        _ = inter.recv() => {
-            println!("SIGINT");
-            // Shut down
-            println!("Shutting down");
-
-            data_store_tx
-                .send(DataStoreMessage::Shutdown)
-                .await
-                .expect("Unable to send datastore task shutdown message");
-            println!("Shut down datastore task");
-
-            notifiers_tx
-                .send(NotifierMessage::Shutdown)
-                .expect("Unable to send notifier thread shutdown message");
-            notifier_join_handle
-                .join()
-                .expect("Failed to join notifier thread");
-            println!("Shut down notifier thread");
-
-            api_join_handle.join().expect("Failed to join API thread");
-            println!("Shut down API thread");
-
-            join_all(file_handler_futures);
-            println!("Shut down API thread");
-
-        },
+        _ = inter.recv() => println!("SIGINT"),
         _ = term.recv() => println!("SIGTERM"),
-        _ = join_all(file_handler_futures) => println!("JOINED ALL")
+        _ = &mut file_handlers_join_future => println!("JOINED ALL")
     };
 
-    // let _res = .await;
+    // Shut down
+    println!("Shutting down");
 
+    file_summary_timer_task_join_handle.abort();
+    println!("Killed file summary timer task");
+
+    data_store_tx
+        .send(DataStoreMessage::Shutdown)
+        .await
+        .expect("Unable to send datastore task shutdown message");
+    println!("Shut down datastore task");
+
+    notifiers_tx
+        .send(NotifierMessage::Shutdown)
+        .expect("Unable to send notifier thread shutdown message");
+    notifier_join_handle
+        .join()
+        .expect("Failed to join notifier thread");
+    println!("Shut down notifier thread");
+
+    api_join_handle.join().expect("Failed to join API thread");
+    println!("Shut down API thread");
+
+    println!("Signalling shutdown to file handlers tasks");
+    for tx in &mut file_handler_txs {
+        tx.send(LineHandlerMessage::Shutdown)
+            .await
+            .expect("couldn't send file handler shutdown message");
+    }
+    file_handlers_join_future.await;
+    println!("Shut down file handlers tasks");
+
+    println!("Exiting");
     Ok(())
 }
 
@@ -138,7 +146,7 @@ fn start_file_summary_timer_task(
     notifiers_for_files_last_seen: Vec<NotifierId>,
     period_for_files_last_seen: usize,
     data_store_tx: &Sender<DataStoreMessage>,
-) {
+) -> JoinHandle<()> {
     let data_store_tx_for_timer = data_store_tx.clone();
     tokio::spawn(async move {
         // Wait before first send
@@ -152,7 +160,7 @@ fn start_file_summary_timer_task(
                 .expect("Datastore task not dead");
             sleep(Duration::from_secs(period_for_files_last_seen as u64)).await;
         }
-    });
+    })
 }
 
 fn pop_structs_from_config(

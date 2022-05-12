@@ -1,12 +1,57 @@
 use crate::data::FileSetData;
 use crate::fileset::FileSetId;
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
 use log::info;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock as RwLock_Tokio;
-use tokio::task::JoinHandle;
 
+#[get("/fileset")]
+async fn get_filesets(
+    filesets_data_rwlock: web::Data<Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>>,
+) -> impl Responder {
+    let fileset_data = filesets_data_rwlock.read().await;
+    HttpResponse::Ok().json(&fileset_data.keys().cloned().collect::<Vec<FileSetId>>())
+}
+
+#[get("/fileset/{fileset_id}/monitor")]
+async fn get_monitors_for_fileset(
+    filesets_data_rwlock: web::Data<Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>>,
+    fileset_id: web::Path<String>,
+) -> impl Responder {
+    let fileset_data = filesets_data_rwlock.read().await;
+    if let Some(fileset) = fileset_data.get::<String>(&fileset_id) {
+        HttpResponse::Ok().json(
+            &fileset
+                .monitor_data
+                .keys()
+                .cloned()
+                .collect::<Vec<FileSetId>>(),
+        )
+    } else {
+        HttpResponse::NotFound().json(json!({ "error": "fileset not found" }))
+    }
+}
+
+#[get("/fileset/{fileset_id}/monitor/{monitor_id}")]
+async fn get_monitor(
+    filesets_data_rwlock: web::Data<Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>>,
+    path: web::Path<(String, String)>,
+) -> impl Responder {
+    let fileset_data = filesets_data_rwlock.read().await;
+    if let Some(fileset) = fileset_data.get::<String>(&path.0) {
+        if let Some(monitor_data) = fileset.monitor_data.get(&path.1) {
+            HttpResponse::Ok().json(&monitor_data)
+        } else {
+            HttpResponse::NotFound().json(json!({ "error": "monitor not found" }))
+        }
+    } else {
+        HttpResponse::NotFound().json(json!({ "error": "fileset not found" }))
+    }
+}
+
+#[get("/dump")]
 async fn dump(
     filesets_data_rwlock: web::Data<Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>>,
 ) -> impl Responder {
@@ -26,7 +71,10 @@ async fn run_actix(
     let res = HttpServer::new(move || {
         App::new()
             .app_data(wrapped_filesets_data_rwlock.clone())
-            .route("/dump", web::get().to(dump))
+            .service(get_filesets)
+            .service(get_monitors_for_fileset)
+            .service(get_monitor)
+            .service(dump)
     })
     .bind(("127.0.0.1", 8080))?
     .run()
