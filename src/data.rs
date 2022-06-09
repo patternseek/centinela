@@ -2,10 +2,14 @@ use crate::fileset::FileSetId;
 use crate::monitor::MonitorId;
 use crate::notifier::{NotifierId, NotifierMessage};
 use chrono::offset::TimeZone;
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc, Weekday};
 use linemux::Line;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::error::Error;
+use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -104,7 +108,7 @@ impl MonitorData {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
 pub struct EventCounts {
     pub seconds: HashMap<DateTime<Utc>, usize>,
     pub minutes: HashMap<DateTime<Utc>, usize>,
@@ -190,12 +194,6 @@ impl EventCounts {
                 self.days.insert(days, 1);
             }
         };
-        println!(
-            "{} {} {}",
-            now.iso_week().week(),
-            now.year(),
-            Weekday::Mon.number_from_monday()
-        );
         let week = Utc
             .isoywd(now.year(), now.iso_week().week(), Weekday::Mon)
             .and_hms(0, 0, 0);
@@ -311,6 +309,7 @@ pub(crate) enum DataStoreMessage {
     ),
     FileSeen(FileSetId, String),
     NotifyFilesSeen(Vec<NotifierId>),
+    Persist,
     Shutdown,
 }
 
@@ -318,6 +317,7 @@ pub(crate) fn start_task(
     filesets_data_rwlock: Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
     mut files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>>,
     notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
+    data_file_path: String,
 ) -> Sender<DataStoreMessage> {
     let (tx, mut rx) = channel(32);
     tokio::spawn(async move {
@@ -378,6 +378,9 @@ pub(crate) fn start_task(
                     let _ =
                         notifiers_tx.send(NotifierMessage::NotifyMessage(notifier_ids, message));
                 }
+                DataStoreMessage::Persist => {
+                    persist_data(&filesets_data_rwlock, data_file_path.as_str()).await
+                }
                 DataStoreMessage::Shutdown => break,
             }
         }
@@ -398,4 +401,37 @@ fn fetch_monitor_data<'a>(
         .get_mut(monitor_id)
         .expect("Invalid monitor ID in DataStoreMessage::StoreLine message");
     monitor_data
+}
+
+async fn persist_data(
+    filesets_data_rwlock: &Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
+    data_file_path: &str,
+) {
+    let data = filesets_data_rwlock.read().await;
+    let mut save_data: HashMap<FileSetId, HashMap<MonitorId, EventCounts>> = Default::default();
+    for (fileset_id, fileset_data) in &data as &HashMap<FileSetId, FileSetData> {
+        let mut fileset_counts: HashMap<MonitorId, EventCounts> = Default::default();
+        for (monitor_id, monitor_data) in &fileset_data.monitor_data {
+            let counts = monitor_data.counts.clone();
+            fileset_counts.insert(monitor_id.clone(), counts);
+        }
+        save_data.insert(fileset_id.clone(), fileset_counts);
+    }
+    let data_str = serde_json::to_string(&save_data).expect("Failed to encode data-store to JSON");
+    // Early drop to release the lock
+    drop(data);
+    match fs::write(data_file_path, data_str) {
+        Ok(_) => println!("Wrote data file: {}", &data_file_path),
+        Err(err) => println!("Error writing data file: {}", err),
+    };
+}
+
+pub(crate) fn load_data_from_file(
+    data_file_path: &str,
+) -> Result<HashMap<FileSetId, HashMap<MonitorId, EventCounts>>, Box<dyn Error>> {
+    let mut file = File::open(data_file_path)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    let stats = serde_json::from_str(&contents)?;
+    Ok(stats)
 }

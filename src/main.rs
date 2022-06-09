@@ -6,8 +6,8 @@ mod monitor;
 mod notifier;
 
 use crate::config::{ConfigFile, NotifierConfig};
-use crate::data::DataStoreMessage;
 use crate::data::FileSetData;
+use crate::data::{DataStoreMessage, EventCounts, MonitorData};
 use crate::fileset::{FileSet, FileSetId, LineHandlerMessage};
 use crate::monitor::{Monitor, MonitorId};
 use crate::notifier::{Notifier, NotifierId, NotifierMessage, WebhookBackEnd};
@@ -36,6 +36,8 @@ Log statistics and alerts.
 struct Args {
     #[structopt(help = "Config file path (YAML)")]
     config_file: String,
+    #[structopt(help = "Data storage file path (JSON). Will be created if not present.")]
+    data_file: String,
 }
 
 #[tokio::main]
@@ -54,11 +56,25 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
+    // Load event counts data from file, if present.
+    let counts: HashMap<FileSetId, HashMap<MonitorId, EventCounts>> =
+        match data::load_data_from_file(&args.data_file) {
+            Ok(data) => {
+                println!("Loaded data file from {}", &args.data_file);
+                data
+            }
+            Err(e) => {
+                eprintln!("Failed to load data from {}: {}", &args.data_file, e);
+                Default::default()
+            }
+        };
+
     let notifiers_for_files_last_seen = config.global.notifiers_for_files_last_seen.clone();
     let period_for_files_last_seen = config.global.period_for_files_last_seen;
 
     // Prep structs and data
-    let (mut filesets, filesets_data, _monitors, notifiers) = pop_structs_from_config(config);
+    let (mut filesets, filesets_data, _monitors, notifiers) =
+        pop_structs_from_config(config, counts);
     let files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>> = HashMap::new();
 
     // Start long-running threads and tasks
@@ -67,6 +83,7 @@ async fn main() -> std::io::Result<()> {
         filesets_data.clone(),
         files_last_seen_data,
         notifiers_tx.clone(),
+        args.data_file.clone(),
     );
 
     // Start web API
@@ -78,6 +95,8 @@ async fn main() -> std::io::Result<()> {
         period_for_files_last_seen,
         &data_store_tx,
     );
+
+    let start_persist_data_timer_task_join_handle = start_persist_data_timer_task(&data_store_tx);
 
     // Follow the files matched by each FileSet
     let mut file_handler_futures: Vec<BoxFuture<()>> = Vec::new();
@@ -111,6 +130,14 @@ async fn main() -> std::io::Result<()> {
 
     file_summary_timer_task_join_handle.abort();
     println!("Killed file summary timer task");
+
+    data_store_tx
+        .send(DataStoreMessage::Persist)
+        .await
+        .expect("Failed to send DataStoreMessage::Persist message during shutwodn");
+    println!("Saving data");
+    start_persist_data_timer_task_join_handle.abort();
+    println!("Killed data persistance timer task");
 
     data_store_tx
         .send(DataStoreMessage::Shutdown)
@@ -157,14 +184,30 @@ fn start_file_summary_timer_task(
                     notifiers_for_files_last_seen.clone(),
                 ))
                 .await
-                .expect("Datastore task not dead");
+                .expect("Datastore task seems to be dead when sending DataStoreMessage::NotifyFilesSeen");
             sleep(Duration::from_secs(period_for_files_last_seen as u64)).await;
+        }
+    })
+}
+
+fn start_persist_data_timer_task(data_store_tx: &Sender<DataStoreMessage>) -> JoinHandle<()> {
+    let data_store_tx_for_timer = data_store_tx.clone();
+    tokio::spawn(async move {
+        // Wait before first send
+        sleep(Duration::from_secs(10)).await;
+        loop {
+            data_store_tx_for_timer
+                .send(DataStoreMessage::Persist)
+                .await
+                .expect("Datastore task seems to be dead when sending DataStoreMessage::Persist");
+            sleep(Duration::from_secs(30)).await;
         }
     })
 }
 
 fn pop_structs_from_config(
     config: ConfigFile,
+    counts: HashMap<FileSetId, HashMap<MonitorId, EventCounts>>,
 ) -> (
     HashMap<FileSetId, FileSet>,
     Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
@@ -178,6 +221,7 @@ fn pop_structs_from_config(
 
     let mut filesets: HashMap<FileSetId, FileSet> = Default::default();
     let mut filesets_data: HashMap<FileSetId, FileSetData> = Default::default();
+
     for (fileset_id, fileset_conf) in config.file_sets {
         // Create the FileSet
         let fs = FileSet::new_from_config(fileset_conf, &monitors);
@@ -187,8 +231,13 @@ fn pop_structs_from_config(
         };
         // Create a MonitorData for each Monitor that's used by the FileSet
         for (monitor_id, (_, _)) in &fs.monitor_notifier_sets {
-            fsd.monitor_data
-                .insert(monitor_id.clone(), Default::default());
+            let mut md = MonitorData::default();
+            if let Some(fileset_counts) = counts.get(&fileset_id) {
+                if let Some(monitor_counts) = fileset_counts.get(monitor_id) {
+                    md.counts = monitor_counts.clone();
+                }
+            }
+            fsd.monitor_data.insert(monitor_id.clone(), md);
         }
         filesets.insert(fileset_id.clone(), fs);
         filesets_data.insert(fileset_id.clone(), fsd);
