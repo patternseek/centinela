@@ -16,11 +16,13 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::RwLock as RwLock_Tokio;
 
+/// Counts and recent events for a single set of monitored files
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct FileSetData {
     pub monitor_data: HashMap<MonitorId, MonitorData>,
 }
 
+/// Counts and recent events for a single monitor for a single set of monitored files
 #[derive(Serialize, Deserialize, Default, Debug)]
 pub struct MonitorData {
     pub counts: EventCounts,
@@ -56,6 +58,7 @@ impl MonitorData {
         notifier_ids: Option<Vec<NotifierId>>,
         notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
     ) {
+        // Optionally store the event
         let keep_num_events = match keep_num_events {
             None => 0,
             Some(keep_events) => {
@@ -77,6 +80,8 @@ impl MonitorData {
                     "Unable to get last element in Monitor.recent_events despite just adding one.",
                 )
                 .clone();
+            // Spawn a thread that will wait for additional lines from the log, if configured, until
+            // a timeout is reached, then send an event to the notifiers thread
             std::thread::spawn(move || {
                 let mut done = false;
                 while !done {
@@ -108,6 +113,8 @@ impl MonitorData {
     }
 }
 
+/// Keeps counts of monitor match events bucketed by various
+/// time increments
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
 pub struct EventCounts {
     pub seconds: HashMap<DateTime<Utc>, usize>,
@@ -128,7 +135,7 @@ impl EventCounts {
     const KEEP_MONTHS: usize = 48;
     const KEEP_YEARS: usize = 10;
 
-    // Trim all event count types
+    /// Trim all event count types
     fn trim_all(&mut self) {
         EventCounts::trim_older(&mut self.seconds, EventCounts::KEEP_SECONDS);
         EventCounts::trim_older(&mut self.minutes, EventCounts::KEEP_MINUTES * 60);
@@ -229,11 +236,17 @@ impl EventCounts {
     }
 }
 
+/// A particular monitor match event
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MonitorEvent {
+    /// Matching log lines
     pub lines: Vec<LogLine>,
+    /// How many additional lines should be collected
     pub awaiting_lines: usize,
+    /// Which files the lines we're waiting from should be found
     pub awaiting_lines_from: PathBuf,
+    /// Timeout after which a notification will be sent even if we're still waiting for
+    /// additional lines
     pub notify_by: DateTime<Utc>,
 }
 
@@ -274,6 +287,7 @@ impl MonitorEvent {
     }
 }
 
+/// A single line from a log file
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LogLine {
     pub date: DateTime<Utc>,
@@ -287,16 +301,7 @@ impl ToString for LogLine {
     }
 }
 
-// pub enum PeriodType {
-//     Seconds,
-//     Minutes,
-//     Hours,
-//     Days,
-//     Weeks,
-//     Months,
-//     Years,
-// }
-
+/// Messages that the data store task listens for
 #[derive(Debug)]
 pub(crate) enum DataStoreMessage {
     ReceiveLine(FileSetId, MonitorId, Line),
@@ -313,6 +318,8 @@ pub(crate) enum DataStoreMessage {
     Shutdown,
 }
 
+/// Start the data store task.
+/// This loops listening for events until it's instructed to shut down.
 pub(crate) fn start_task(
     filesets_data_rwlock: Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
     mut files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>>,
@@ -388,6 +395,7 @@ pub(crate) fn start_task(
     tx
 }
 
+/// Small helper for fetching specific monitor data
 fn fetch_monitor_data<'a>(
     filesets_data: &'a mut HashMap<String, FileSetData>,
     file_set_id: &FileSetId,
@@ -403,6 +411,7 @@ fn fetch_monitor_data<'a>(
     monitor_data
 }
 
+/// Save counts data to disk
 async fn persist_data(
     filesets_data_rwlock: &Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
     data_file_path: &str,
@@ -426,6 +435,7 @@ async fn persist_data(
     };
 }
 
+/// Load counts data from disk
 pub(crate) fn load_data_from_file(
     data_file_path: &str,
 ) -> Result<HashMap<FileSetId, HashMap<MonitorId, EventCounts>>, Box<dyn Error>> {

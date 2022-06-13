@@ -6,19 +6,23 @@ use std::collections::HashMap;
 use std::ops::Sub;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 
+/// Newtype
 pub(crate) type NotifierId = String;
 
+/// Body type for sending webhook messages
 #[derive(Serialize, Deserialize)]
 struct WebhookBody {
     text: String,
 }
 
+/// Messages the notifier thread listens for
 pub(crate) enum NotifierMessage {
     NotifyEvent(Vec<NotifierId>, MonitorEvent),
     NotifyMessage(Vec<NotifierId>, String),
     Shutdown,
 }
 
+/// In-memory representation of a Notifier
 pub(crate) struct Notifier {
     pub(crate) config: NotifierConfig,
     pub(crate) back_end: Box<dyn BackEnd + Sync + Send>,
@@ -26,11 +30,13 @@ pub(crate) struct Notifier {
     pub(crate) skipped_notifications: usize,
 }
 
+/// Trait to be implemented by Notifier back-ends.
 pub(crate) trait BackEnd {
     fn notify_event(&self, ev: &MonitorEvent, skipped_notifications: usize);
     fn notify_message(&self, message: &str);
 }
 
+/// Slack/Mattermost webhook
 pub struct WebhookBackEnd {
     pub(crate) config: WebhookNotifierConfig,
 }
@@ -112,6 +118,7 @@ fn skip_if_inside_minimum_interval(
     false
 }
 
+/// Start the notifier thread. Listens for NotifierMessages
 pub(crate) fn start_thread(
     mut notifiers: HashMap<NotifierId, Notifier>,
 ) -> (SyncSender<NotifierMessage>, std::thread::JoinHandle<()>) {

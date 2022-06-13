@@ -24,7 +24,7 @@ use tokio::sync::RwLock as RwLock_Tokio;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
-// CLI argument config
+/// CLI argument config
 #[derive(StructOpt, Debug)]
 #[structopt(
     name = "Centinela",
@@ -40,6 +40,7 @@ struct Args {
     data_file: String,
 }
 
+/// Main entry point
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     // console_subscriber::init();
@@ -69,6 +70,7 @@ async fn main() -> std::io::Result<()> {
             }
         };
 
+    // Grab a couple of values before giving away the config object
     let notifiers_for_files_last_seen = config.global.notifiers_for_files_last_seen.clone();
     let period_for_files_last_seen = config.global.period_for_files_last_seen;
 
@@ -96,6 +98,7 @@ async fn main() -> std::io::Result<()> {
         &data_store_tx,
     );
 
+    // Start a timer task to periodically persist the counts data
     let start_persist_data_timer_task_join_handle = start_persist_data_timer_task(&data_store_tx);
 
     // Follow the files matched by each FileSet
@@ -169,6 +172,8 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Starts a timer task which periodically sends notifications
+/// indicating which files Centinela is monitoring.
 fn start_file_summary_timer_task(
     notifiers_for_files_last_seen: Vec<NotifierId>,
     period_for_files_last_seen: usize,
@@ -190,6 +195,7 @@ fn start_file_summary_timer_task(
     })
 }
 
+/// Starts a timer which periodically persists counts data to disk
 fn start_persist_data_timer_task(data_store_tx: &Sender<DataStoreMessage>) -> JoinHandle<()> {
     let data_store_tx_for_timer = data_store_tx.clone();
     tokio::spawn(async move {
@@ -205,6 +211,8 @@ fn start_persist_data_timer_task(data_store_tx: &Sender<DataStoreMessage>) -> Jo
     })
 }
 
+/// Populates the main in memory data structures based on the config
+/// file and any persisted data in the counts data file
 fn pop_structs_from_config(
     config: ConfigFile,
     counts: HashMap<FileSetId, HashMap<MonitorId, EventCounts>>,

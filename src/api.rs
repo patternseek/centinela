@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock as RwLock_Tokio;
 
+/// HTTP GET a list of all the filesets
 #[get("/fileset")]
 async fn get_filesets(
     filesets_data_rwlock: web::Data<Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>>,
@@ -15,6 +16,7 @@ async fn get_filesets(
     HttpResponse::Ok().json(&fileset_data.keys().cloned().collect::<Vec<FileSetId>>())
 }
 
+/// HTTP GET a list of all the monitors for a given fileset
 #[get("/fileset/{fileset_id}/monitor")]
 async fn get_monitors_for_fileset(
     filesets_data_rwlock: web::Data<Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>>,
@@ -34,6 +36,7 @@ async fn get_monitors_for_fileset(
     }
 }
 
+/// Get a specific monitor for a specific fileset
 #[get("/fileset/{fileset_id}/monitor/{monitor_id}")]
 async fn get_monitor(
     filesets_data_rwlock: web::Data<Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>>,
@@ -51,6 +54,7 @@ async fn get_monitor(
     }
 }
 
+/// Dump the entire in-memory data set
 #[get("/dump")]
 async fn dump(
     filesets_data_rwlock: web::Data<Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>>,
@@ -59,11 +63,11 @@ async fn dump(
     HttpResponse::Ok().body(serde_json::to_string(&*fileset_data).expect("Couldn't serialise data"))
 }
 
+/// Start the HTTP API
 #[tokio::main]
 async fn run_actix(
     filesets_data_rwlock: Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
 ) -> std::io::Result<()> {
-    // console_subscriber::init();
     info!("Webserver starting");
 
     let wrapped_filesets_data_rwlock = web::Data::new(filesets_data_rwlock);
@@ -76,13 +80,14 @@ async fn run_actix(
             .service(get_monitor)
             .service(dump)
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind(("127.0.0.1", 8694))?
     .run()
     .await;
     info!("Webserver exited");
     res
 }
 
+/// Start the thread that contains the HTTP API
 pub(crate) fn start_thread(
     filesets_data_rwlock: Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
 ) -> std::thread::JoinHandle<()> {

@@ -15,24 +15,35 @@ use std::path::PathBuf;
 use std::process::exit;
 use tokio::sync::mpsc::Sender;
 
+/// Newtype to create an ID for FileSets
 pub(crate) type FileSetId = String;
 
+/// Newtype to simplify this type
 pub(crate) type MonitorToNotifiersRelation = HashMap<MonitorId, (Monitor, Option<Vec<NotifierId>>)>;
 
+/// Messages the LineHandler loop listens for. Only shutdown currently.
 #[derive(Debug, PartialEq)]
 pub(crate) enum LineHandlerMessage {
     Shutdown,
 }
 
+/// Struct containing in-memory data about a particular set of monitored files
 pub(crate) struct FileSet {
     pub(crate) config: FileSetConfig,
+    /// Notifiers used for monitors for this FileSet
     pub(crate) monitor_notifier_sets: MonitorToNotifiersRelation,
+    /// Buffers of recent lines from monitored files
     pub(crate) line_buffers_before: HashMap<PathBuf, VecDeque<LogLine>>,
+    /// Calculated value for the maximum number of previous lines needed by any of
+    /// the active monitors for this FileSet
     pub(crate) max_lines_before: usize,
+    /// Calculated value for the maximum number of subsequent lines needed by any of
+    /// the active monitors for this FileSet
     pub(crate) max_lines_after: usize,
 }
 
 impl FileSet {
+    /// Create a new FileSet from a FileSetConfig
     pub(crate) fn new_from_config(
         config: FileSetConfig,
         monitors: &HashMap<MonitorId, Monitor>,
@@ -55,6 +66,8 @@ impl FileSet {
         set
     }
 
+    /// Create a MuxedLines line follower for this FileSet.
+    /// Update self.max_lines_before and self.max_lines_after if necessary.
     pub(crate) async fn get_follower(&mut self) -> Result<MuxedLines, Box<dyn Error>> {
         let mut line_follower = match MuxedLines::new() {
             Ok(lf) => lf,
