@@ -157,7 +157,7 @@ impl FileSet {
                         }
                         Err(err) => {
                             eprintln!("Error: {}", err);
-                            exit(1);
+                            continue;
                         }
                     };
                     // Keep track of when we last received a line from each file
