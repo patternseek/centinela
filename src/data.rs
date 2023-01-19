@@ -1,20 +1,28 @@
 use crate::fileset::FileSetId;
 use crate::monitor::MonitorId;
 use crate::notifier::{NotifierId, NotifierMessage};
-use chrono::{DateTime, Duration, Timelike, Utc};
+use chrono::offset::TimeZone;
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc, Weekday};
 use linemux::Line;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::error::Error;
+use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::ops::Sub;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::RwLock as RwLock_Tokio;
 
+/// Counts and recent events for a single set of monitored files
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct FileSetData {
     pub monitor_data: HashMap<MonitorId, MonitorData>,
 }
 
+/// Counts and recent events for a single monitor for a single set of monitored files
 #[derive(Serialize, Deserialize, Default, Debug)]
 pub struct MonitorData {
     pub counts: EventCounts,
@@ -50,6 +58,7 @@ impl MonitorData {
         notifier_ids: Option<Vec<NotifierId>>,
         notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
     ) {
+        // Optionally store the event
         let keep_num_events = match keep_num_events {
             None => 0,
             Some(keep_events) => {
@@ -71,6 +80,8 @@ impl MonitorData {
                     "Unable to get last element in Monitor.recent_events despite just adding one.",
                 )
                 .clone();
+            // Spawn a thread that will wait for additional lines from the log, if configured, until
+            // a timeout is reached, then send an event to the notifiers thread
             std::thread::spawn(move || {
                 let mut done = false;
                 while !done {
@@ -102,7 +113,9 @@ impl MonitorData {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+/// Keeps counts of monitor match events bucketed by various
+/// time increments
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
 pub struct EventCounts {
     pub seconds: HashMap<DateTime<Utc>, usize>,
     pub minutes: HashMap<DateTime<Utc>, usize>,
@@ -122,7 +135,7 @@ impl EventCounts {
     const KEEP_MONTHS: usize = 48;
     const KEEP_YEARS: usize = 10;
 
-    // Trim all event count types
+    /// Trim all event count types
     fn trim_all(&mut self) {
         EventCounts::trim_older(&mut self.seconds, EventCounts::KEEP_SECONDS);
         EventCounts::trim_older(&mut self.minutes, EventCounts::KEEP_MINUTES * 60);
@@ -188,44 +201,52 @@ impl EventCounts {
                 self.days.insert(days, 1);
             }
         };
-
-        let weeks = now.date().and_hms(now.hour(), 0, 0);
-        match self.weeks.get_mut(&weeks) {
+        let week = Utc
+            .isoywd(now.year(), now.iso_week().week(), Weekday::Mon)
+            .and_hms(0, 0, 0);
+        match self.weeks.get_mut(&week) {
             Some(weeks_count) => {
                 *weeks_count += 1;
             }
             None => {
-                self.weeks.insert(weeks, 1);
+                self.weeks.insert(week, 1);
             }
         };
 
-        let months = now.date().and_hms(now.hour(), 0, 0);
-        match self.months.get_mut(&months) {
+        // let month = now.date().and_hms(now.hour(), 0, 0);
+        let month = Utc.ymd(now.year(), now.month(), 1).and_hms(0, 0, 0);
+        match self.months.get_mut(&month) {
             Some(months_count) => {
                 *months_count += 1;
             }
             None => {
-                self.months.insert(months, 1);
+                self.months.insert(month, 1);
             }
         };
 
-        let years = now.date().and_hms(now.hour(), 0, 0);
-        match self.years.get_mut(&years) {
+        let year = Utc.ymd(now.year(), 1, 1).and_hms(0, 0, 0);
+        match self.years.get_mut(&year) {
             Some(years_count) => {
                 *years_count += 1;
             }
             None => {
-                self.years.insert(years, 1);
+                self.years.insert(year, 1);
             }
         };
     }
 }
 
+/// A particular monitor match event
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MonitorEvent {
+    /// Matching log lines
     pub lines: Vec<LogLine>,
+    /// How many additional lines should be collected
     pub awaiting_lines: usize,
+    /// Which files the lines we're waiting from should be found
     pub awaiting_lines_from: PathBuf,
+    /// Timeout after which a notification will be sent even if we're still waiting for
+    /// additional lines
     pub notify_by: DateTime<Utc>,
 }
 
@@ -266,6 +287,7 @@ impl MonitorEvent {
     }
 }
 
+/// A single line from a log file
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LogLine {
     pub date: DateTime<Utc>,
@@ -279,16 +301,7 @@ impl ToString for LogLine {
     }
 }
 
-// pub enum PeriodType {
-//     Seconds,
-//     Minutes,
-//     Hours,
-//     Days,
-//     Weeks,
-//     Months,
-//     Years,
-// }
-
+/// Messages that the data store task listens for
 #[derive(Debug)]
 pub(crate) enum DataStoreMessage {
     ReceiveLine(FileSetId, MonitorId, Line),
@@ -301,18 +314,24 @@ pub(crate) enum DataStoreMessage {
     ),
     FileSeen(FileSetId, String),
     NotifyFilesSeen(Vec<NotifierId>),
+    Persist,
+    Shutdown,
 }
 
+/// Start the data store task.
+/// This loops listening for events until it's instructed to shut down.
 pub(crate) fn start_task(
-    mut filesets_data: HashMap<FileSetId, FileSetData>,
+    filesets_data_rwlock: Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
     mut files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>>,
     notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
+    data_file_path: String,
 ) -> Sender<DataStoreMessage> {
     let (tx, mut rx) = channel(32);
     tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
             match message {
                 DataStoreMessage::ReceiveLine(file_set_id, monitor_id, log_line) => {
+                    let mut filesets_data = filesets_data_rwlock.write().await;
                     let monitor_data =
                         fetch_monitor_data(&mut filesets_data, &file_set_id, &monitor_id);
                     monitor_data.receive_line(&log_line, log_line.source());
@@ -324,6 +343,7 @@ pub(crate) fn start_task(
                     keep_num_events,
                     notifier_ids,
                 ) => {
+                    let mut filesets_data = filesets_data_rwlock.write().await;
                     let monitor_data =
                         fetch_monitor_data(&mut filesets_data, &file_set_id, &monitor_id);
                     let _ = monitor_data
@@ -365,12 +385,17 @@ pub(crate) fn start_task(
                     let _ =
                         notifiers_tx.send(NotifierMessage::NotifyMessage(notifier_ids, message));
                 }
+                DataStoreMessage::Persist => {
+                    persist_data(&filesets_data_rwlock, data_file_path.as_str()).await
+                }
+                DataStoreMessage::Shutdown => break,
             }
         }
     });
     tx
 }
 
+/// Small helper for fetching specific monitor data
 fn fetch_monitor_data<'a>(
     filesets_data: &'a mut HashMap<String, FileSetData>,
     file_set_id: &FileSetId,
@@ -384,4 +409,39 @@ fn fetch_monitor_data<'a>(
         .get_mut(monitor_id)
         .expect("Invalid monitor ID in DataStoreMessage::StoreLine message");
     monitor_data
+}
+
+/// Save counts data to disk
+async fn persist_data(
+    filesets_data_rwlock: &Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
+    data_file_path: &str,
+) {
+    let data = filesets_data_rwlock.read().await;
+    let mut save_data: HashMap<FileSetId, HashMap<MonitorId, EventCounts>> = Default::default();
+    for (fileset_id, fileset_data) in &data as &HashMap<FileSetId, FileSetData> {
+        let mut fileset_counts: HashMap<MonitorId, EventCounts> = Default::default();
+        for (monitor_id, monitor_data) in &fileset_data.monitor_data {
+            let counts = monitor_data.counts.clone();
+            fileset_counts.insert(monitor_id.clone(), counts);
+        }
+        save_data.insert(fileset_id.clone(), fileset_counts);
+    }
+    let data_str = serde_json::to_string(&save_data).expect("Failed to encode data-store to JSON");
+    // Early drop to release the lock
+    drop(data);
+    match fs::write(data_file_path, data_str) {
+        Ok(_) => println!("Wrote data file: {}", &data_file_path),
+        Err(err) => println!("Error writing data file: {}", err),
+    };
+}
+
+/// Load counts data from disk
+pub(crate) fn load_data_from_file(
+    data_file_path: &str,
+) -> Result<HashMap<FileSetId, HashMap<MonitorId, EventCounts>>, Box<dyn Error>> {
+    let mut file = File::open(data_file_path)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    let stats = serde_json::from_str(&contents)?;
+    Ok(stats)
 }

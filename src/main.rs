@@ -1,3 +1,4 @@
+mod api;
 mod config;
 mod data;
 mod fileset;
@@ -5,20 +6,25 @@ mod monitor;
 mod notifier;
 
 use crate::config::{ConfigFile, NotifierConfig};
-use crate::data::DataStoreMessage;
 use crate::data::FileSetData;
-use crate::fileset::{FileSet, FileSetId};
+use crate::data::{DataStoreMessage, EventCounts, MonitorData};
+use crate::fileset::{FileSet, FileSetId, LineHandlerMessage};
 use crate::monitor::{Monitor, MonitorId};
-use crate::notifier::{Notifier, NotifierId, WebhookBackEnd};
+use crate::notifier::{Notifier, NotifierId, NotifierMessage, WebhookBackEnd};
 use chrono::{DateTime, Utc};
 use futures::future::{join_all, BoxFuture};
 use linemux::MuxedLines;
 use std::collections::HashMap;
 use std::process::exit;
+use std::sync::Arc;
 use structopt::*;
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::RwLock as RwLock_Tokio;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
-// CLI argument config
+/// CLI argument config
 #[derive(StructOpt, Debug)]
 #[structopt(
     name = "Centinela",
@@ -30,10 +36,15 @@ Log statistics and alerts.
 struct Args {
     #[structopt(help = "Config file path (YAML)")]
     config_file: String,
+    #[structopt(help = "Data storage file path (JSON). Will be created if not present.")]
+    data_file: String,
 }
 
+/// Main entry point
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    // console_subscriber::init();
+
     // Parse CLI args
     let args = Args::from_args();
 
@@ -46,18 +57,128 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
+    // Load event counts data from file, if present.
+    let counts: HashMap<FileSetId, HashMap<MonitorId, EventCounts>> =
+        match data::load_data_from_file(&args.data_file) {
+            Ok(data) => {
+                println!("Loaded data file from {}", &args.data_file);
+                data
+            }
+            Err(e) => {
+                eprintln!("Failed to load data from {}: {}", &args.data_file, e);
+                Default::default()
+            }
+        };
+
+    // Grab a couple of values before giving away the config object
     let notifiers_for_files_last_seen = config.global.notifiers_for_files_last_seen.clone();
     let period_for_files_last_seen = config.global.period_for_files_last_seen;
 
     // Prep structs and data
-    let (mut filesets, filesets_data, _monitors, notifiers) = pop_structs_from_config(config);
+    let (mut filesets, filesets_data, _monitors, notifiers) =
+        pop_structs_from_config(config, counts);
     let files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>> = HashMap::new();
 
     // Start long-running threads and tasks
-    let notifiers_tx = notifier::start_thread(notifiers);
-    let data_store_tx = data::start_task(filesets_data, files_last_seen_data, notifiers_tx.clone());
+    let (notifiers_tx, notifier_join_handle) = notifier::start_thread(notifiers);
+    let data_store_tx = data::start_task(
+        filesets_data.clone(),
+        files_last_seen_data,
+        notifiers_tx.clone(),
+        args.data_file.clone(),
+    );
+
+    // Start web API
+    let api_join_handle = api::start_thread(filesets_data.clone());
 
     // Timer task to send a summary of which files have been seen and when
+    let file_summary_timer_task_join_handle = start_file_summary_timer_task(
+        notifiers_for_files_last_seen,
+        period_for_files_last_seen,
+        &data_store_tx,
+    );
+
+    // Start a timer task to periodically persist the counts data
+    let start_persist_data_timer_task_join_handle = start_persist_data_timer_task(&data_store_tx);
+
+    // Follow the files matched by each FileSet
+    let mut file_handler_futures: Vec<BoxFuture<()>> = Vec::new();
+    let mut file_handler_txs: Vec<Sender<LineHandlerMessage>> = Vec::new();
+    for (fileset_id, file_set) in &mut filesets {
+        let line_follower: MuxedLines = match file_set.get_follower().await {
+            Ok(lf) => lf,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                exit(1);
+            }
+        };
+        let (tx, rx) = channel(32);
+        let fut = file_set.line_handler(fileset_id, line_follower, data_store_tx.clone(), rx);
+        file_handler_futures.push(Box::pin(fut));
+        file_handler_txs.push(tx);
+    }
+
+    // Handle signals
+    let mut inter = signal(SignalKind::interrupt()).expect("couldn't listen for interrupt signal");
+    let mut term = signal(SignalKind::terminate()).expect("couldn't listen for terminate signal");
+    let mut file_handlers_join_future = join_all(file_handler_futures);
+    tokio::select! {
+        _ = inter.recv() => println!("SIGINT"),
+        _ = term.recv() => println!("SIGTERM"),
+        _ = &mut file_handlers_join_future => println!("JOINED ALL")
+    };
+
+    // Shut down
+    println!("Shutting down");
+
+    file_summary_timer_task_join_handle.abort();
+    println!("Killed file summary timer task");
+
+    data_store_tx
+        .send(DataStoreMessage::Persist)
+        .await
+        .expect("Failed to send DataStoreMessage::Persist message during shutwodn");
+    println!("Saving data");
+    start_persist_data_timer_task_join_handle.abort();
+    println!("Killed data persistance timer task");
+
+    data_store_tx
+        .send(DataStoreMessage::Shutdown)
+        .await
+        .expect("Unable to send datastore task shutdown message");
+    println!("Shut down datastore task");
+
+    notifiers_tx
+        .send(NotifierMessage::Shutdown)
+        .expect("Unable to send notifier thread shutdown message");
+    notifier_join_handle
+        .join()
+        .expect("Failed to join notifier thread");
+    println!("Shut down notifier thread");
+
+    api_join_handle.join().expect("Failed to join API thread");
+    println!("Shut down API thread");
+
+    println!("Signalling shutdown to file handlers tasks");
+    for tx in &mut file_handler_txs {
+        tx.send(LineHandlerMessage::Shutdown)
+            .await
+            .expect("couldn't send file handler shutdown message");
+    }
+    file_handlers_join_future.await;
+    println!("Shut down file handlers tasks");
+
+    println!("Exiting");
+    Ok(())
+}
+
+/// Starts a timer task which periodically sends notifications
+/// indicating which files Centinela is monitoring.
+fn start_file_summary_timer_task(
+    notifiers_for_files_last_seen: Vec<NotifierId>,
+    period_for_files_last_seen: usize,
+    data_store_tx: &Sender<DataStoreMessage>,
+) -> JoinHandle<()> {
     let data_store_tx_for_timer = data_store_tx.clone();
     tokio::spawn(async move {
         // Wait before first send
@@ -68,35 +189,36 @@ async fn main() -> std::io::Result<()> {
                     notifiers_for_files_last_seen.clone(),
                 ))
                 .await
-                .expect("Datastore task not dead");
+                .expect("Datastore task seems to be dead when sending DataStoreMessage::NotifyFilesSeen");
             sleep(Duration::from_secs(period_for_files_last_seen as u64)).await;
         }
-    });
-
-    // Follow the files matched by each FileSet
-    let mut file_handler_futures: Vec<BoxFuture<()>> = Vec::new();
-    for (fileset_id, file_set) in &mut filesets {
-        let line_follower: MuxedLines = match file_set.get_follower().await {
-            Ok(lf) => lf,
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                exit(1);
-            }
-        };
-        let fut = file_set.line_handler(fileset_id, line_follower, data_store_tx.clone());
-        file_handler_futures.push(Box::pin(fut));
-    }
-
-    let _res = join_all(file_handler_futures).await;
-
-    Ok(())
+    })
 }
 
+/// Starts a timer which periodically persists counts data to disk
+fn start_persist_data_timer_task(data_store_tx: &Sender<DataStoreMessage>) -> JoinHandle<()> {
+    let data_store_tx_for_timer = data_store_tx.clone();
+    tokio::spawn(async move {
+        // Wait before first send
+        sleep(Duration::from_secs(10)).await;
+        loop {
+            data_store_tx_for_timer
+                .send(DataStoreMessage::Persist)
+                .await
+                .expect("Datastore task seems to be dead when sending DataStoreMessage::Persist");
+            sleep(Duration::from_secs(30)).await;
+        }
+    })
+}
+
+/// Populates the main in memory data structures based on the config
+/// file and any persisted data in the counts data file
 fn pop_structs_from_config(
     config: ConfigFile,
+    counts: HashMap<FileSetId, HashMap<MonitorId, EventCounts>>,
 ) -> (
     HashMap<FileSetId, FileSet>,
-    HashMap<FileSetId, FileSetData>,
+    Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
     HashMap<MonitorId, Monitor>,
     HashMap<NotifierId, Notifier>,
 ) {
@@ -107,6 +229,7 @@ fn pop_structs_from_config(
 
     let mut filesets: HashMap<FileSetId, FileSet> = Default::default();
     let mut filesets_data: HashMap<FileSetId, FileSetData> = Default::default();
+
     for (fileset_id, fileset_conf) in config.file_sets {
         // Create the FileSet
         let fs = FileSet::new_from_config(fileset_conf, &monitors);
@@ -116,12 +239,18 @@ fn pop_structs_from_config(
         };
         // Create a MonitorData for each Monitor that's used by the FileSet
         for (monitor_id, (_, _)) in &fs.monitor_notifier_sets {
-            fsd.monitor_data
-                .insert(monitor_id.clone(), Default::default());
+            let mut md = MonitorData::default();
+            if let Some(fileset_counts) = counts.get(&fileset_id) {
+                if let Some(monitor_counts) = fileset_counts.get(monitor_id) {
+                    md.counts = monitor_counts.clone();
+                }
+            }
+            fsd.monitor_data.insert(monitor_id.clone(), md);
         }
         filesets.insert(fileset_id.clone(), fs);
         filesets_data.insert(fileset_id.clone(), fsd);
     }
+    let filesets_data_rwlock = Arc::new(RwLock_Tokio::new(filesets_data));
 
     let mut notifiers: HashMap<NotifierId, Notifier> = Default::default();
     for (notifier_id, notifier_config) in config.notifiers {
@@ -139,5 +268,5 @@ fn pop_structs_from_config(
             },
         );
     }
-    (filesets, filesets_data, monitors, notifiers)
+    (filesets, filesets_data_rwlock, monitors, notifiers)
 }

@@ -15,19 +15,35 @@ use std::path::PathBuf;
 use std::process::exit;
 use tokio::sync::mpsc::Sender;
 
+/// Newtype to create an ID for FileSets
 pub(crate) type FileSetId = String;
 
+/// Newtype to simplify this type
 pub(crate) type MonitorToNotifiersRelation = HashMap<MonitorId, (Monitor, Option<Vec<NotifierId>>)>;
 
+/// Messages the LineHandler loop listens for. Only shutdown currently.
+#[derive(Debug, PartialEq)]
+pub(crate) enum LineHandlerMessage {
+    Shutdown,
+}
+
+/// Struct containing in-memory data about a particular set of monitored files
 pub(crate) struct FileSet {
     pub(crate) config: FileSetConfig,
+    /// Notifiers used for monitors for this FileSet
     pub(crate) monitor_notifier_sets: MonitorToNotifiersRelation,
+    /// Buffers of recent lines from monitored files
     pub(crate) line_buffers_before: HashMap<PathBuf, VecDeque<LogLine>>,
+    /// Calculated value for the maximum number of previous lines needed by any of
+    /// the active monitors for this FileSet
     pub(crate) max_lines_before: usize,
+    /// Calculated value for the maximum number of subsequent lines needed by any of
+    /// the active monitors for this FileSet
     pub(crate) max_lines_after: usize,
 }
 
 impl FileSet {
+    /// Create a new FileSet from a FileSetConfig
     pub(crate) fn new_from_config(
         config: FileSetConfig,
         monitors: &HashMap<MonitorId, Monitor>,
@@ -50,6 +66,8 @@ impl FileSet {
         set
     }
 
+    /// Create a MuxedLines line follower for this FileSet.
+    /// Update self.max_lines_before and self.max_lines_after if necessary.
     pub(crate) async fn get_follower(&mut self) -> Result<MuxedLines, Box<dyn Error>> {
         let mut line_follower = match MuxedLines::new() {
             Ok(lf) => lf,
@@ -120,57 +138,67 @@ impl FileSet {
         fileset_id: &FileSetId,
         mut line_follower: MuxedLines,
         data_store_tx: Sender<DataStoreMessage>,
+        mut line_handler_rx: tokio::sync::mpsc::Receiver<LineHandlerMessage>,
     ) {
         // For each line received from a set of files
         loop {
-            let line = match line_follower.next_line().await {
-                Ok(Some(line)) => line,
-                Ok(None) => {
-                    eprintln!("No files added to file set follower: {}", fileset_id);
-                    exit(1);
+            tokio::select! {
+                msg_opt = line_handler_rx.recv() => {
+                    if  Some(LineHandlerMessage::Shutdown) == msg_opt {
+                        break;
+                    }
                 }
-                Err(err) => {
-                    eprintln!("Error: {}", err);
-                    exit(1);
-                }
-            };
-            // Keep track of when we last received a line from each file
-            let _ = data_store_tx
-                .send(DataStoreMessage::FileSeen(
-                    fileset_id.to_string(),
-                    line.source()
-                        .to_str()
-                        .expect("Valid string as filename")
-                        .to_string(),
-                ))
-                .await;
-            // Check for monitor matches
-            for (monitor_id, (monitor, notifier_ids)) in &mut self.monitor_notifier_sets {
-                // Pass the line to the MonitorData in case there are previous events awaiting subsequent lines
-                let _ = data_store_tx
-                    .send(DataStoreMessage::ReceiveLine(
-                        fileset_id.clone(),
-                        monitor_id.clone(),
-                        line.clone(),
-                    ))
-                    .await;
-                // Pass the line to the monitor for testing and possibly processing
-                if let Some(ev) = monitor
-                    .handle_line(&line, self.line_buffers_before.get(line.source()))
-                    .await
-                {
+                line_res = line_follower.next_line() => {
+                    let line = match line_res {
+                        Ok(Some(line)) => line,
+                        Ok(None) => {
+                            eprintln!("No files added to file set follower: {}", fileset_id);
+                            exit(1);
+                        }
+                        Err(err) => {
+                            eprintln!("Error: {}", err);
+                            continue;
+                        }
+                    };
+                    // Keep track of when we last received a line from each file
                     let _ = data_store_tx
-                        .send(DataStoreMessage::ReceiveEvent(
-                            fileset_id.clone(),
-                            monitor_id.clone(),
-                            ev,
-                            monitor.config.log_recent_events,
-                            notifier_ids.clone(),
+                        .send(DataStoreMessage::FileSeen(
+                            fileset_id.to_string(),
+                            line.source()
+                                .to_str()
+                                .expect("Valid string as filename")
+                                .to_string(),
                         ))
                         .await;
-                };
+                    // Check for monitor matches
+                    for (monitor_id, (monitor, notifier_ids)) in &mut self.monitor_notifier_sets {
+                        // Pass the line to the MonitorData in case there are previous events awaiting subsequent lines
+                        let _ = data_store_tx
+                            .send(DataStoreMessage::ReceiveLine(
+                                fileset_id.clone(),
+                                monitor_id.clone(),
+                                line.clone(),
+                            ))
+                            .await;
+                        // Pass the line to the monitor for testing and possibly processing
+                        if let Some(ev) = monitor
+                            .handle_line(&line, self.line_buffers_before.get(line.source()))
+                            .await
+                        {
+                            let _ = data_store_tx
+                                .send(DataStoreMessage::ReceiveEvent(
+                                    fileset_id.clone(),
+                                    monitor_id.clone(),
+                                    ev,
+                                    monitor.config.log_recent_events,
+                                    notifier_ids.clone(),
+                                ))
+                                .await;
+                        };
+                    }
+                    self.buffer_line(&line);
+                }
             }
-            self.buffer_line(&line);
         }
     }
 
