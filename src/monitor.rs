@@ -9,17 +9,14 @@ pub(crate) type MonitorId = String;
 #[derive(Clone)]
 pub(crate) struct Monitor {
     pub(crate) config: MonitorConfig,
-    // pub(crate) notifiers: Vec<NotifierId>,
 }
 
 impl Monitor {
     pub(crate) fn new_from_config(config: MonitorConfig) -> Monitor {
-        Monitor {
-            config,
-            // notifiers: Default::default(),
-        }
+        Monitor { config }
     }
 
+    /// Process a single logfile line
     pub(crate) async fn handle_line(
         &mut self,
         line: &Line,
