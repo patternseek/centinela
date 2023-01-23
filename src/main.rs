@@ -43,7 +43,8 @@ struct Args {
 /// Main entry point
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    // console_subscriber::init();
+    // For tokio debugging. Enable this and run with: RUSTFLAGS="--cfg tokio_unstable" cargo run ./config.yaml ./data.json
+    console_subscriber::init();
 
     // Parse CLI args
     let args = Args::from_args();

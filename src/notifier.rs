@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ops::Sub;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use log::{error, log, info};
 
 /// Newtype
 pub(crate) type NotifierId = String;
@@ -123,7 +124,9 @@ pub(crate) fn start_thread(
     mut notifiers: HashMap<NotifierId, Notifier>,
 ) -> (SyncSender<NotifierMessage>, std::thread::JoinHandle<()>) {
     let (tx, rx): (SyncSender<NotifierMessage>, Receiver<NotifierMessage>) = sync_channel(32);
-    let join_handle = std::thread::spawn(move || loop {
+    let join_handle = std::thread::spawn(move || {
+        info!("Started notifier thread");
+        loop {
         match rx.recv().expect("channel not broken") {
             NotifierMessage::NotifyEvent(notifier_ids, ev_clone) => {
                 for notifier_id in &notifier_ids {
@@ -146,6 +149,6 @@ pub(crate) fn start_thread(
             }
             NotifierMessage::Shutdown => break,
         }
-    });
+    }});
     (tx, join_handle)
 }

@@ -2,26 +2,26 @@
 name = "centinela"
 version = "0.1.0"
 authors = ["Tolan Blundell <tolan@patternseek.net>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-linemux = "0.2"
-tokio = { version = "1.15", features = ["full","tracing"] }
+linemux = "0.3.0"
+tokio = { version = "1.24", features = ["full","tracing"] }
 console-subscriber = "0.1"
 actix-web = "4"
 #parking_lot = { version = "0.12.0", features = ["serde"] }
 regex = "1.4.4"
 futures = "0.3"
 glob = "0.3.0"
-serde = { version = "1.0.124", features = ["derive","rc"] }
-serde_regex = "1.1.0"
-serde_yaml = "0.8.17"
-serde_json = "1.0.64"
+serde = { version = "1.0", features = ["derive","rc"] }
+serde_regex = "1.1"
+serde_yaml = "0.9"
+serde_json = "1.0"
 log = "0.4.14"
 chrono = { version = "0.4.19", features = ["serde"] }
 url = { version = "2.2.1", features = ["serde"] }
 maplit = "1.0.2"
-reqwest = { version = "0.11.3", features = ["blocking"] }
+reqwest = { version = "0.11", features = ["blocking"] }
 async-trait = "0.1.50"
 structopt = "0.3.21"
 structopt-derive = "0.4.14"

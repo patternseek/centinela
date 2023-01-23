@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::RwLock as RwLock_Tokio;
+use log::{error, log, info};
+
 
 /// Counts and recent events for a single set of monitored files
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -41,7 +43,7 @@ impl MonitorData {
             .filter(|ev| ev.awaiting_lines > 0 && ev.awaiting_lines_from == source)
             .for_each(|mut ev| {
                 ev.lines.push(LogLine {
-                    date: chrono::offset::Utc::now(),
+                    date: Utc::now(),
                     line: line.line().to_string(),
                     is_event_line: false,
                 });
@@ -83,6 +85,7 @@ impl MonitorData {
             // Spawn a thread that will wait for additional lines from the log, if configured, until
             // a timeout is reached, then send an event to the notifiers thread
             std::thread::spawn(move || {
+                info!( "Started line waiter thread" );
                 let mut done = false;
                 while !done {
                     let ev = ev_arc_mut.read().expect("unpoisoned lock");
@@ -99,6 +102,7 @@ impl MonitorData {
                         done = true;
                     }
                 }
+                info!( "Ended line waiter thread" );
             });
         }
     }
@@ -346,7 +350,7 @@ pub(crate) fn start_task(
                     let mut filesets_data = filesets_data_rwlock.write().await;
                     let monitor_data =
                         fetch_monitor_data(&mut filesets_data, &file_set_id, &monitor_id);
-                    let _ = monitor_data
+                    monitor_data
                         .receive_event(ev, keep_num_events, notifier_ids, notifiers_tx.clone())
                         .await;
                 }
