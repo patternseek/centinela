@@ -125,7 +125,7 @@ pub(crate) fn start_thread(
 ) -> (SyncSender<NotifierMessage>, std::thread::JoinHandle<()>) {
     let (tx, rx): (SyncSender<NotifierMessage>, Receiver<NotifierMessage>) = sync_channel(32);
     let join_handle = std::thread::spawn(move || {
-        info!("Started notifier thread");
+        println!("Started notifier thread");
         loop {
         match rx.recv().expect("channel not broken") {
             NotifierMessage::NotifyEvent(notifier_ids, ev_clone) => {

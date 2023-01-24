@@ -85,7 +85,7 @@ impl MonitorData {
             // Spawn a thread that will wait for additional lines from the log, if configured, until
             // a timeout is reached, then send an event to the notifiers thread
             std::thread::spawn(move || {
-                info!( "Started line waiter thread" );
+                println!( "Started line waiter thread" );
                 let mut done = false;
                 while !done {
                     let ev = ev_arc_mut.read().expect("unpoisoned lock");
@@ -102,7 +102,7 @@ impl MonitorData {
                         done = true;
                     }
                 }
-                info!( "Ended line waiter thread" );
+                println!( "Ended line waiter thread" );
             });
         }
     }

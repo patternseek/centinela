@@ -23,6 +23,11 @@ use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::RwLock as RwLock_Tokio;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
+use actix_web::{web, App, HttpServer};
+
+
+use std::io::Error;
+use futures::TryFutureExt;
 
 /// CLI argument config
 #[derive(StructOpt, Debug)]
@@ -42,7 +47,7 @@ struct Args {
 
 /// Main entry point
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<(), Error> {
     // For tokio debugging. Enable this and run with: RUSTFLAGS="--cfg tokio_unstable" cargo run ./config.yaml ./data.json
     console_subscriber::init();
 
@@ -90,7 +95,27 @@ async fn main() -> std::io::Result<()> {
     );
 
     // Start web API
-    let api_join_handle = api::start_thread(filesets_data.clone());
+
+        println!("Webserver starting");
+
+        let wrapped_filesets_data_rwlock = web::Data::new(filesets_data.clone());
+
+        let actix_future = HttpServer::new(move || {
+            App::new()
+                .app_data(wrapped_filesets_data_rwlock.clone())
+                .service(api::get_filesets)
+                .service(api::get_monitors_for_fileset)
+                .service(api::get_monitor)
+                .service(api::dump)
+        })
+            .bind(("127.0.0.1", 8694)).expect("Failed to bind to API port: 8694" )
+            .run();
+
+
+    tokio::spawn(async move {
+        actix_future.await.expect("API server failed");
+        println!("Webserver exited");
+    });
 
     // Timer task to send a summary of which files have been seen and when
     let file_summary_timer_task_join_handle = start_file_summary_timer_task(
@@ -157,8 +182,8 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to join notifier thread");
     println!("Shut down notifier thread");
 
-    api_join_handle.join().expect("Failed to join API thread");
-    println!("Shut down API thread");
+//    api_join_handle.abort();
+//    println!("Shut down API thread");
 
     println!("Signalling shutdown to file handlers tasks");
     for tx in &mut file_handler_txs {
