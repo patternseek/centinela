@@ -24,7 +24,7 @@ pub struct ConfigFile {
     pub global: GlobalConfig,
     pub file_sets: HashMap<FileSetId, FileSetConfig>,
     pub monitors: HashMap<MonitorId, MonitorConfig>,
-    #[serde(with = "serde_yaml::with::singleton_map")]
+    #[serde(with = "serde_yaml::with::singleton_map_recursive")]
     pub notifiers: HashMap<NotifierId, NotifierConfig>,
 }
 
