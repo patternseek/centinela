@@ -1,13 +1,11 @@
 use crate::data::FileSetData;
 use crate::fileset::FileSetId;
-use actix_web::{get, web, App, HttpResponse, HttpServer, Responder};
-use log::info;
+use actix_web::{get, web, HttpResponse, Responder};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock as RwLock_Tokio;
 
-use std::io::Error;
 
 /// HTTP GET a list of all the filesets
 #[get("/fileset")]

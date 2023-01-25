@@ -2,7 +2,7 @@ use crate::fileset::FileSetId;
 use crate::monitor::MonitorId;
 use crate::notifier::{NotifierId, NotifierMessage};
 use chrono::offset::TimeZone;
-use chrono::{DateTime, Datelike, Duration, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc, Weekday};
 use linemux::Line;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,8 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::RwLock as RwLock_Tokio;
-use log::{error, log, info};
-
+use tokio::task::JoinHandle;
 
 /// Counts and recent events for a single set of monitored files
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -58,7 +57,7 @@ impl MonitorData {
         ev: MonitorEvent,
         keep_num_events: Option<usize>,
         notifier_ids: Option<Vec<NotifierId>>,
-        notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
+        notifiers_tx: Sender<NotifierMessage>,
     ) {
         // Optionally store the event
         let keep_num_events = match keep_num_events {
@@ -82,27 +81,35 @@ impl MonitorData {
                     "Unable to get last element in Monitor.recent_events despite just adding one.",
                 )
                 .clone();
-            // Spawn a thread that will wait for additional lines from the log, if configured, until
-            // a timeout is reached, then send an event to the notifiers thread
-            std::thread::spawn(move || {
-                println!( "Started line waiter thread" );
+            // Spawn a task that will wait for additional lines from the log, if configured, until
+            // a timeout is reached, then send an event to the notifiers task
+            tokio::spawn(async move {
+                println!("Started line waiter task");
                 let mut done = false;
                 while !done {
-                    let ev = ev_arc_mut.read().expect("unpoisoned lock");
-                    if ev.awaiting_lines > 0 && ev.notify_by > chrono::Utc::now() {
+                    // Use a scope to drop ev rather than drop().
+                    // See: https://tokio.rs/tokio/tutorial/shared-state
+                    // This is because the compiler
+                    // currently calculates whether a future is Send based on scope information
+                    // only. The compiler will hopefully be updated to support explicitly
+                    // dropping it in the future, but for now, you must explicitly use a scope.
+                    let ev_clone;
+                    {
+                        let ev = ev_arc_mut.read().expect("unpoisoned lock");
+                        ev_clone = ev.clone();
+                    }
+                    if ev_clone.awaiting_lines > 0 && ev_clone.notify_by > Utc::now() {
                         //println!("Waiting for {} lines...", &ev.awaiting_lines);
-                        drop(ev);
-                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     } else {
-                        let ev_clone = ev.clone();
-                        drop(ev);
                         // Notify
                         let _ = notifiers_tx
-                            .send(NotifierMessage::NotifyEvent(notifier_ids.clone(), ev_clone));
+                            .send(NotifierMessage::NotifyEvent(notifier_ids.clone(), ev_clone))
+                            .await;
                         done = true;
                     }
                 }
-                println!( "Ended line waiter thread" );
+                println!("Ended line waiter task");
             });
         }
     }
@@ -158,15 +165,24 @@ impl EventCounts {
 
     /// Trim old event counts of a particular type
     fn trim_older(items: &mut HashMap<DateTime<Utc>, usize>, keep_seconds: usize) {
-        let now = chrono::offset::Utc::now();
+        let now = Utc::now();
         items.retain(|k, _v| *k >= now.sub(Duration::seconds(keep_seconds as i64)));
     }
 
     /// Increment all current counters
     fn increment(&mut self) {
-        let now = chrono::offset::Utc::now();
+        let now = Utc::now();
 
-        let seconds = now.date().and_hms(now.hour(), now.minute(), now.second());
+        let seconds = Utc
+            .with_ymd_and_hms(
+                now.year(),
+                now.month(),
+                now.day(),
+                now.hour(),
+                now.minute(),
+                now.second(),
+            )
+            .unwrap();
         match self.seconds.get_mut(&seconds) {
             Some(seconds_count) => {
                 *seconds_count += 1;
@@ -176,7 +192,16 @@ impl EventCounts {
             }
         };
 
-        let minutes = now.date().and_hms(now.hour(), now.minute(), 0);
+        let minutes = Utc
+            .with_ymd_and_hms(
+                now.year(),
+                now.month(),
+                now.day(),
+                now.hour(),
+                now.minute(),
+                0,
+            )
+            .unwrap();
         match self.minutes.get_mut(&minutes) {
             Some(minutes_count) => {
                 *minutes_count += 1;
@@ -186,7 +211,9 @@ impl EventCounts {
             }
         };
 
-        let hours = now.date().and_hms(now.hour(), 0, 0);
+        let hours = Utc
+            .with_ymd_and_hms(now.year(), now.month(), now.day(), now.hour(), 0, 0)
+            .unwrap();
         match self.hours.get_mut(&hours) {
             Some(hours_count) => {
                 *hours_count += 1;
@@ -196,7 +223,9 @@ impl EventCounts {
             }
         };
 
-        let days = now.date().and_hms(0, 0, 0);
+        let days = Utc
+            .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
+            .unwrap();
         match self.days.get_mut(&days) {
             Some(days_count) => {
                 *days_count += 1;
@@ -205,9 +234,13 @@ impl EventCounts {
                 self.days.insert(days, 1);
             }
         };
-        let week = Utc
-            .isoywd(now.year(), now.iso_week().week(), Weekday::Mon)
-            .and_hms(0, 0, 0);
+        let week = NaiveDate::from_isoywd_opt(now.year(), now.iso_week().week(), Weekday::Mon)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(Utc)
+            .unwrap();
+
         match self.weeks.get_mut(&week) {
             Some(weeks_count) => {
                 *weeks_count += 1;
@@ -218,7 +251,9 @@ impl EventCounts {
         };
 
         // let month = now.date().and_hms(now.hour(), 0, 0);
-        let month = Utc.ymd(now.year(), now.month(), 1).and_hms(0, 0, 0);
+        let month = Utc
+            .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+            .unwrap();
         match self.months.get_mut(&month) {
             Some(months_count) => {
                 *months_count += 1;
@@ -228,7 +263,7 @@ impl EventCounts {
             }
         };
 
-        let year = Utc.ymd(now.year(), 1, 1).and_hms(0, 0, 0);
+        let year = Utc.with_ymd_and_hms(now.year(), 1, 1, 0, 0, 0).unwrap();
         match self.years.get_mut(&year) {
             Some(years_count) => {
                 *years_count += 1;
@@ -324,14 +359,15 @@ pub(crate) enum DataStoreMessage {
 
 /// Start the data store task.
 /// This loops listening for events until it's instructed to shut down.
-pub(crate) fn start_task(
+pub(crate) async fn start_task(
     filesets_data_rwlock: Arc<RwLock_Tokio<HashMap<FileSetId, FileSetData>>>,
     mut files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>>,
-    notifiers_tx: std::sync::mpsc::SyncSender<NotifierMessage>,
+    notifiers_tx: Sender<NotifierMessage>,
     data_file_path: String,
-) -> Sender<DataStoreMessage> {
+) -> (Sender<DataStoreMessage>, JoinHandle<()>) {
     let (tx, mut rx) = channel(32);
-    tokio::spawn(async move {
+    let join_handle = tokio::spawn(async move {
+        println!("Started data store task");
         while let Some(message) = rx.recv().await {
             match message {
                 DataStoreMessage::ReceiveLine(file_set_id, monitor_id, log_line) => {
@@ -386,8 +422,9 @@ pub(crate) fn start_task(
                             .as_str()
                     };
 
-                    let _ =
-                        notifiers_tx.send(NotifierMessage::NotifyMessage(notifier_ids, message));
+                    let _ = notifiers_tx
+                        .send(NotifierMessage::NotifyMessage(notifier_ids, message))
+                        .await;
                 }
                 DataStoreMessage::Persist => {
                     persist_data(&filesets_data_rwlock, data_file_path.as_str()).await
@@ -395,8 +432,9 @@ pub(crate) fn start_task(
                 DataStoreMessage::Shutdown => break,
             }
         }
+        println!("Data store task exiting");
     });
-    tx
+    (tx, join_handle)
 }
 
 /// Small helper for fetching specific monitor data

@@ -5,6 +5,7 @@ authors = ["Tolan Blundell <tolan@patternseek.net>"]
 edition = "2021"
 
 [dependencies]
+async-trait = "0.1.63"
 linemux = "0.3.0"
 tokio = { version = "1.24", features = ["full","tracing"] }
 console-subscriber = "0.1"
@@ -22,7 +23,6 @@ chrono = { version = "0.4.19", features = ["serde"] }
 url = { version = "2.2.1", features = ["serde"] }
 maplit = "1.0.2"
 reqwest = { version = "0.11", features = ["blocking"] }
-async-trait = "0.1.50"
 structopt = "0.3.21"
 structopt-derive = "0.4.14"
 openssl = {version = "0.10", features = ["vendored"]}
