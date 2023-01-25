@@ -11,6 +11,7 @@ use crate::data::{DataStoreMessage, EventCounts, MonitorData};
 use crate::fileset::{FileSet, FileSetId, LineHandlerMessage};
 use crate::monitor::{Monitor, MonitorId};
 use crate::notifier::{Notifier, NotifierId, NotifierMessage, WebhookBackEnd};
+use actix_web::{web, App, HttpServer};
 use chrono::{DateTime, Utc};
 use futures::future::{join_all, BoxFuture};
 use linemux::MuxedLines;
@@ -23,8 +24,6 @@ use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::RwLock as RwLock_Tokio;
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
-use actix_web::{web, App, HttpServer};
-
 
 use std::io::Error;
 
@@ -48,7 +47,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // For tokio debugging. Enable this and run with: RUSTFLAGS="--cfg tokio_unstable" cargo run ./config.yaml ./data.json
-    console_subscriber::init();
+    // console_subscriber::init();
 
     // Parse CLI args
     let args = Args::from_args();
@@ -91,7 +90,8 @@ async fn main() -> Result<(), Error> {
         files_last_seen_data,
         notifiers_tx.clone(),
         args.data_file.clone(),
-    ).await;
+    )
+    .await;
 
     // Start web API
     let wrapped_filesets_data_rwlock = web::Data::new(filesets_data.clone());
@@ -103,7 +103,8 @@ async fn main() -> Result<(), Error> {
             .service(api::get_monitor)
             .service(api::dump)
     })
-    .bind(("127.0.0.1", 8694)).expect("Failed to bind to API port: 8694" )
+    .bind(("127.0.0.1", 8694))
+    .expect("Failed to bind to API port: 8694")
     .run();
 
     let api_join_handle = tokio::spawn(async move {
@@ -146,7 +147,7 @@ async fn main() -> Result<(), Error> {
         _ = inter.recv() => println!("SIGINT"),
         _ = term.recv() => println!("SIGTERM"),
         _ = &mut file_handlers_join_future => println!("JOINED ALL")
-    };
+    }
 
     // Shut down
     println!("Shutting down");
@@ -166,7 +167,9 @@ async fn main() -> Result<(), Error> {
         .send(DataStoreMessage::Shutdown)
         .await
         .expect("Unable to send datastore task shutdown message");
-    data_store_join_handle.await.expect("Unable to join data store task");
+    data_store_join_handle
+        .await
+        .expect("Unable to join data store task");
 
     notifiers_tx
         .send(NotifierMessage::Shutdown)
@@ -282,7 +285,7 @@ fn pop_structs_from_config(
                     back_end: Box::new(WebhookBackEnd {
                         config: wh_config.clone(),
                     }),
-                    last_notify: chrono::offset::Utc::now() - chrono::Duration::weeks(52),
+                    last_notify: Utc::now() - chrono::Duration::weeks(52),
                     skipped_notifications: 0,
                 },
             },
