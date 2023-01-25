@@ -109,7 +109,7 @@ pub(crate) async fn notify_event(mut notifier: &mut Notifier, ev_clone: &Monitor
     }
     let num_skipped = notifier.skipped_notifications;
     notifier.skipped_notifications = 0;
-    notifier.last_notify = chrono::offset::Utc::now();
+    notifier.last_notify = Utc::now();
     // Send notification
     notifier.back_end.notify_event(ev_clone, num_skipped).await;
 }
@@ -120,7 +120,7 @@ fn skip_if_inside_minimum_interval(
     minimum_interval_option: Option<usize>,
 ) -> bool {
     if let Some(minimum_interval) = minimum_interval_option {
-        let now = chrono::offset::Utc::now();
+        let now = Utc::now();
         if now.sub(Duration::seconds(minimum_interval as i64)) <= notifier.last_notify {
             notifier.skipped_notifications += 1;
             return true;

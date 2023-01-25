@@ -2,7 +2,7 @@ use crate::fileset::FileSetId;
 use crate::monitor::MonitorId;
 use crate::notifier::{NotifierId, NotifierMessage};
 use chrono::offset::TimeZone;
-use chrono::{DateTime, Datelike, Duration, Timelike, Utc, Weekday};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc, Weekday};
 use linemux::Line;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -165,15 +165,24 @@ impl EventCounts {
 
     /// Trim old event counts of a particular type
     fn trim_older(items: &mut HashMap<DateTime<Utc>, usize>, keep_seconds: usize) {
-        let now = chrono::offset::Utc::now();
+        let now = Utc::now();
         items.retain(|k, _v| *k >= now.sub(Duration::seconds(keep_seconds as i64)));
     }
 
     /// Increment all current counters
     fn increment(&mut self) {
-        let now = chrono::offset::Utc::now();
+        let now = Utc::now();
 
-        let seconds = now.date().and_hms(now.hour(), now.minute(), now.second());
+        let seconds = Utc
+            .with_ymd_and_hms(
+                now.year(),
+                now.month(),
+                now.day(),
+                now.hour(),
+                now.minute(),
+                now.second(),
+            )
+            .unwrap();
         match self.seconds.get_mut(&seconds) {
             Some(seconds_count) => {
                 *seconds_count += 1;
@@ -183,7 +192,16 @@ impl EventCounts {
             }
         };
 
-        let minutes = now.date().and_hms(now.hour(), now.minute(), 0);
+        let minutes = Utc
+            .with_ymd_and_hms(
+                now.year(),
+                now.month(),
+                now.day(),
+                now.hour(),
+                now.minute(),
+                0,
+            )
+            .unwrap();
         match self.minutes.get_mut(&minutes) {
             Some(minutes_count) => {
                 *minutes_count += 1;
@@ -193,7 +211,9 @@ impl EventCounts {
             }
         };
 
-        let hours = now.date().and_hms(now.hour(), 0, 0);
+        let hours = Utc
+            .with_ymd_and_hms(now.year(), now.month(), now.day(), now.hour(), 0, 0)
+            .unwrap();
         match self.hours.get_mut(&hours) {
             Some(hours_count) => {
                 *hours_count += 1;
@@ -203,7 +223,9 @@ impl EventCounts {
             }
         };
 
-        let days = now.date().and_hms(0, 0, 0);
+        let days = Utc
+            .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
+            .unwrap();
         match self.days.get_mut(&days) {
             Some(days_count) => {
                 *days_count += 1;
@@ -212,9 +234,13 @@ impl EventCounts {
                 self.days.insert(days, 1);
             }
         };
-        let week = Utc
-            .isoywd(now.year(), now.iso_week().week(), Weekday::Mon)
-            .and_hms(0, 0, 0);
+        let week = NaiveDate::from_isoywd_opt(now.year(), now.iso_week().week(), Weekday::Mon)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(Utc)
+            .unwrap();
+
         match self.weeks.get_mut(&week) {
             Some(weeks_count) => {
                 *weeks_count += 1;
@@ -225,7 +251,9 @@ impl EventCounts {
         };
 
         // let month = now.date().and_hms(now.hour(), 0, 0);
-        let month = Utc.ymd(now.year(), now.month(), 1).and_hms(0, 0, 0);
+        let month = Utc
+            .with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+            .unwrap();
         match self.months.get_mut(&month) {
             Some(months_count) => {
                 *months_count += 1;
@@ -235,7 +263,7 @@ impl EventCounts {
             }
         };
 
-        let year = Utc.ymd(now.year(), 1, 1).and_hms(0, 0, 0);
+        let year = Utc.with_ymd_and_hms(now.year(), 1, 1, 0, 0, 0).unwrap();
         match self.years.get_mut(&year) {
             Some(years_count) => {
                 *years_count += 1;
