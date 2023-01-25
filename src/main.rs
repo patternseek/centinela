@@ -27,7 +27,6 @@ use actix_web::{web, App, HttpServer};
 
 
 use std::io::Error;
-use futures::TryFutureExt;
 
 /// CLI argument config
 #[derive(StructOpt, Debug)]
@@ -85,36 +84,31 @@ async fn main() -> Result<(), Error> {
         pop_structs_from_config(config, counts);
     let files_last_seen_data: HashMap<FileSetId, HashMap<String, DateTime<Utc>>> = HashMap::new();
 
-    // Start long-running threads and tasks
-    let (notifiers_tx, notifier_join_handle) = notifier::start_thread(notifiers);
-    let data_store_tx = data::start_task(
+    // Start long-running tasks
+    let (notifiers_tx, notifier_join_handle) = notifier::start_task(notifiers).await;
+    let (data_store_tx, data_store_join_handle) = data::start_task(
         filesets_data.clone(),
         files_last_seen_data,
         notifiers_tx.clone(),
         args.data_file.clone(),
-    );
+    ).await;
 
     // Start web API
+    let wrapped_filesets_data_rwlock = web::Data::new(filesets_data.clone());
+    let actix_future = HttpServer::new(move || {
+        App::new()
+            .app_data(wrapped_filesets_data_rwlock.clone())
+            .service(api::get_filesets)
+            .service(api::get_monitors_for_fileset)
+            .service(api::get_monitor)
+            .service(api::dump)
+    })
+    .bind(("127.0.0.1", 8694)).expect("Failed to bind to API port: 8694" )
+    .run();
 
+    let api_join_handle = tokio::spawn(async move {
         println!("Webserver starting");
-
-        let wrapped_filesets_data_rwlock = web::Data::new(filesets_data.clone());
-
-        let actix_future = HttpServer::new(move || {
-            App::new()
-                .app_data(wrapped_filesets_data_rwlock.clone())
-                .service(api::get_filesets)
-                .service(api::get_monitors_for_fileset)
-                .service(api::get_monitor)
-                .service(api::dump)
-        })
-            .bind(("127.0.0.1", 8694)).expect("Failed to bind to API port: 8694" )
-            .run();
-
-
-    tokio::spawn(async move {
         actix_future.await.expect("API server failed");
-        println!("Webserver exited");
     });
 
     // Timer task to send a summary of which files have been seen and when
@@ -172,18 +166,18 @@ async fn main() -> Result<(), Error> {
         .send(DataStoreMessage::Shutdown)
         .await
         .expect("Unable to send datastore task shutdown message");
-    println!("Shut down datastore task");
+    data_store_join_handle.await.expect("Unable to join data store task");
 
     notifiers_tx
         .send(NotifierMessage::Shutdown)
-        .expect("Unable to send notifier thread shutdown message");
+        .await
+        .expect("Unable to send notifier task shutdown message");
     notifier_join_handle
-        .join()
-        .expect("Failed to join notifier thread");
-    println!("Shut down notifier thread");
+        .await
+        .expect("Failed to join notifier task");
 
-//    api_join_handle.abort();
-//    println!("Shut down API thread");
+    api_join_handle.abort();
+    println!("Killed API task");
 
     println!("Signalling shutdown to file handlers tasks");
     for tx in &mut file_handler_txs {
