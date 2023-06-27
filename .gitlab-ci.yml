@@ -15,8 +15,8 @@ build:
     - apt-get update -yq
     - apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
     - rustup target add x86_64-unknown-linux-musl
-    - RUSTFLAGS="-g" cargo build --target x86_64-unknown-linux-musl --release
-    #- RUSTFLAGS="--cfg tokio_unstable" cargo build --target x86_64-unknown-linux-musl --release
+    # build with debug: - RUSTFLAGS="-g" cargo build --target x86_64-unknown-linux-musl --release
+    - cargo build --target x86_64-unknown-linux-musl --release
   artifacts:
     expire_in: 99 years
     paths:
