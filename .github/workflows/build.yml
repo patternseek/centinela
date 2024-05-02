@@ -1,0 +1,47 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    container: 'rust:latest'
+    runs-on: ubuntu-latest
+    steps:
+      - if: ${{ env.ACT }}
+        name: Hack container for local development
+        run: |
+          curl -fsSL https://deb.nodesource.com/setup_21.x | bash - &&\
+          apt-get install -y nodejs
+      - uses: actions/checkout@v4
+      - run: apt-get update -yq
+      - run: apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: cargo build --target x86_64-unknown-linux-musl --release
+      - uses: ncipollo/release-action@v1
+        with:
+          artifacts: "./target/x86_64-unknown-linux-musl/release/centinela"
+          body: "Release"
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: cargo/
+          key: cargo
+          restore-keys: cargo
+      - name: Cache apt
+        uses: actions/cache@v3
+        with:
+          path: apt/
+          key: apt
+          restore-keys: apt
+      - name: Cache target
+        uses: actions/cache@v3
+        with:
+          path: target/
+          key: target
+          restore-keys: target
