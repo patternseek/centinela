@@ -1,9 +1,13 @@
-name: Build and release
+name: Compile, build and push container and release
 
 on:
+  pull_request: # on PR creation and update
   push:
+    branches:
+      - develop # triggers on PR merge
     tags:
-      - '*'
+      - '*' # on new tags 
+  workflow_dispatch: # manual
 
 permissions:
   contents: write
