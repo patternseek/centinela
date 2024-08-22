@@ -16,12 +16,18 @@ jobs:
   compile:
     container: 'rust:latest'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - if: ${{ env.ACT }}
         name: Hack container for local development
         run: |
           curl -fsSL https://deb.nodesource.com/setup_21.x | bash - &&\
           apt-get install -y nodejs
+          
+      # Compile
+          
       - uses: actions/checkout@v4
       - run: apt-get update -yq
       - run: apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
@@ -49,16 +55,11 @@ jobs:
           path: target/
           key: target
           restore-keys: target
+
+      # Build and push image
           
-          
-  build-and-push-image:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+#      - name: Checkout repository
+#        uses: actions/checkout@v3
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
