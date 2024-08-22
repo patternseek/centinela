@@ -45,12 +45,15 @@ pub struct FileSetConfig {
 /// Definition of a specific monitor. Can be applied to multiple FileSets
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MonitorConfig {
+    /// Regex must contain one and only one capture group, to capture variants
+    /// If no variants are expected then the capture group can surround the
+    /// entire regexmeetsoci
     #[serde(with = "serde_regex")]
     pub regex: Regex,
     pub log_recent_events: Option<usize>,
     pub keep_lines_before: Option<usize>,
     pub keep_lines_after: Option<usize>,
-    pub log_counts: bool,
+    pub log_variants: bool,
     pub max_wait_before_notify: usize,
 }
 

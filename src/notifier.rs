@@ -98,7 +98,7 @@ impl BackEnd for WebhookBackEnd {
 }
 
 /// Send an event notification if and when appropriate
-pub(crate) async fn notify_event(mut notifier: &mut Notifier, ev_clone: &MonitorEvent) {
+pub(crate) async fn notify_event( notifier: &mut Notifier, ev_clone: &MonitorEvent) {
     // Limit how often notifications are sent
     let mininum_interval = match &notifier.config {
         NotifierConfig::Webhook(conf) => conf.minimum_interval,
@@ -116,7 +116,7 @@ pub(crate) async fn notify_event(mut notifier: &mut Notifier, ev_clone: &Monitor
 
 /// Check whether the minimum interval between notifications has elapsed
 fn skip_if_inside_minimum_interval(
-    mut notifier: &mut Notifier,
+    notifier: &mut Notifier,
     minimum_interval_option: Option<usize>,
 ) -> bool {
     if let Some(minimum_interval) = minimum_interval_option {

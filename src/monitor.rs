@@ -23,6 +23,16 @@ impl Monitor {
         previous_lines: Option<&VecDeque<LogLine>>,
     ) -> Option<MonitorEvent> {
         if self.config.regex.is_match(line.line()) {
+
+            let mut variant = String::new();
+            for (_, [variant_tmp]) in self.config.regex.captures_iter(line.line()).map(|c| c.extract()) {
+                // This will only run if a capture group matches.
+                // Hoewever all regexes must have one and only one capture
+                // group, so in order to reach this code it will theoretically
+                // always have a matching capture group.
+                variant = variant_tmp.to_string();
+            }
+            
             // Log line in question
             let log_line = LogLine {
                 date: chrono::offset::Utc::now(),
@@ -54,6 +64,7 @@ impl Monitor {
             // Create a new match event
             let ev = MonitorEvent {
                 lines,
+                variant: variant,
                 awaiting_lines: self.config.keep_lines_after.unwrap_or(0),
                 awaiting_lines_from: line.source().to_owned(),
                 notify_by: chrono::offset::Utc::now()

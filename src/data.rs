@@ -124,6 +124,26 @@ impl MonitorData {
     }
 }
 
+/// These are an initial attempt at a data structure for keeping track of top event match variants 
+/// They're not yet in use.
+
+type Variant = String;
+type VariantsCountsBucket = HashMap<Variant,usize>;
+type BucketStart = DateTime<Utc>;
+type VariantsCountsBucketSet = HashMap<BucketStart, VariantsCountsBucket>;
+
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
+pub struct VariantsCounter {
+    pub seconds: VariantsCountsBucketSet,
+    pub minutes: VariantsCountsBucketSet,
+    pub hours: VariantsCountsBucketSet,
+    pub days: VariantsCountsBucketSet,
+    pub weeks: VariantsCountsBucketSet,
+    pub months: VariantsCountsBucketSet,
+    pub years: VariantsCountsBucketSet,
+}
+
+
 /// Keeps counts of monitor match events bucketed by various
 /// time increments
 #[derive(Clone, Serialize, Deserialize, Default, Debug)]
