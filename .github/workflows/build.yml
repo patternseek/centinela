@@ -42,24 +42,22 @@ jobs:
         with:
           artifacts: "./target/x86_64-unknown-linux-musl/release/centinela"
           body: "Release"
-      - name: Cache cargo
-        uses: actions/cache@v3
-        with:
-          path: cargo/
-          key: cargo
-          restore-keys: cargo
       - name: Cache apt
         uses: actions/cache@v3
         with:
           path: apt/
           key: apt
           restore-keys: apt
-      - name: Cache target
+      - name: Cache cargo and target
         uses: actions/cache@v3
         with:
-          path: target/
-          key: target
-          restore-keys: target
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Upload binary for next job
         uses: actions/upload-artifact@v4
         with:
@@ -90,9 +88,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+#      - uses: webfactory/ssh-agent@v0.9.0
+#        with:
+#          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Fix ref_name
         run: echo "REF_NAME_SAFE=$(echo '${{github.ref_name}}' | sed -e 's/\//_/' )" >> $GITHUB_ENV
@@ -104,7 +102,7 @@ jobs:
           file: "docker/build/Dockerfile"
           push: true
           tags: ${{ env.REGISTRY }}/centinela:${{ env.REF_NAME_SAFE }}
-          ssh: |
-            default=${{ env.SSH_AUTH_SOCK }}
+#          ssh: |
+#            default=${{ env.SSH_AUTH_SOCK }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FE_FPM }}:develop
           cache-to: type=inline
