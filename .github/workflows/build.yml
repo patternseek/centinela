@@ -9,6 +9,9 @@ on:
       - '*' # on new tags 
   workflow_dispatch: # manual
 
+env:
+  REGISTRY: ghcr.io
+
 permissions:
   contents: write
 
