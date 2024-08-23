@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  compile_build_container_push:
+  compile:
     container: 'rust:latest'
     runs-on: ubuntu-latest
     permissions:
@@ -57,11 +57,28 @@ jobs:
           path: target/
           key: target
           restore-keys: target
+      - name: Upload binary for next job
+        uses: actions/upload-artifact@v4
+        with:
+          name: centinela_temp_binary
+          path: "./target/x86_64-unknown-linux-musl/release/centinela"
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
 
-      # Build and push image
-          
-#      - name: Checkout repository
-#        uses: actions/checkout@v3
+  build_container_and_push:
+    needs: compile
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - uses: actions/download-artifact@v4
+        with:
+          name: centinela_temp_binary
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
