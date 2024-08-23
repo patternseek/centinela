@@ -5,7 +5,8 @@ RUN mkdir /appconf
 RUN mkdir /appdata
 RUN mkdir /logdata
 
-COPY ./target/x86_64-unknown-linux-musl/release/centinela /app/
+# This is here because the binary is copied as an artefact in github actions
+COPY ./centinela /app/
 
 ENTRYPOINT /app/centinela /appconf/config.yaml /appdata/data.json
 
