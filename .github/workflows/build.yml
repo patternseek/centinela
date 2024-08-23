@@ -32,16 +32,6 @@ jobs:
       # Compile
           
       - uses: actions/checkout@v4
-      - run: apt-get update -yq
-      - run: apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
-      - run: rustup target add x86_64-unknown-linux-musl
-      - run: cargo build --target x86_64-unknown-linux-musl --release
-      # Only generate release when running for a tag
-      - if: startsWith(github.ref, 'refs/tags/')
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "./target/x86_64-unknown-linux-musl/release/centinela"
-          body: "Release"
       - name: Cache apt
         uses: actions/cache@v3
         with:
@@ -58,6 +48,16 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: apt-get update -yq
+      - run: apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: cargo build --target x86_64-unknown-linux-musl --release
+      # Only generate release when running for a tag
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "./target/x86_64-unknown-linux-musl/release/centinela"
+          body: "Release"
       - name: Upload binary for next job
         uses: actions/upload-artifact@v4
         with:
