@@ -101,7 +101,7 @@ jobs:
           context: .
           file: "docker/build/Dockerfile"
           push: true
-          tags: ${{ env.REGISTRY }}/centinela:${{ env.REF_NAME_SAFE }}
+          tags: ${{ env.REGISTRY }}/patternseek/centinela:${{ env.REF_NAME_SAFE }}
 #          ssh: |
 #            default=${{ env.SSH_AUTH_SOCK }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FE_FPM }}:develop
