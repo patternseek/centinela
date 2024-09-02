@@ -22,3 +22,4 @@ jobs:
           package: ${{ env.IMAGE_NAME }}
           include-tags: ${{ github.event.pull_request.number }}_merge
           token: ${{ secrets.GITHUB_TOKEN }}
+   
