@@ -8,8 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: "sulis-admonkey-fpm"
-
+  IMAGE_NAME: "centinela"
 
 jobs:
   delete-image:
@@ -23,4 +22,3 @@ jobs:
           package: ${{ env.IMAGE_NAME }}
           include-tags: ${{ github.event.pull_request.number }}_merge
           token: ${{ secrets.GITHUB_TOKEN }}
-
