@@ -1,0 +1,26 @@
+# Delete container images after PR merge
+
+name: 'Clean up PR container images'
+
+on:
+  pull_request:
+    types: [closed]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: "sulis-admonkey-fpm"
+
+
+jobs:
+  delete-image:
+    name: Delete image from ghcr.io
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: jenskeiner/ghcr-container-repository-cleanup-action@v1
+        with:
+          package: ${{ env.IMAGE_NAME }}
+          include-tags: ${{ github.event.pull_request.number }}_merge
+          token: ${{ secrets.GITHUB_TOKEN }}
+
