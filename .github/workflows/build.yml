@@ -1,47 +1,111 @@
-name: Build and release
+name: Compile, build and push container and release
 
 on:
+  pull_request: # on PR creation and update
   push:
+    branches:
+      - develop # triggers on PR merge
     tags:
-      - '*'
+      - '*' # on new tags 
+  workflow_dispatch: # manual
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: patternseek/centinela
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  compile:
     container: 'rust:latest'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - if: ${{ env.ACT }}
         name: Hack container for local development
         run: |
           curl -fsSL https://deb.nodesource.com/setup_21.x | bash - &&\
           apt-get install -y nodejs
+          
+      # Compile
+          
       - uses: actions/checkout@v4
-      - run: apt-get update -yq
-      - run: apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
-      - run: rustup target add x86_64-unknown-linux-musl
-      - run: cargo build --target x86_64-unknown-linux-musl --release
-      - uses: ncipollo/release-action@v1
-        with:
-          artifacts: "./target/x86_64-unknown-linux-musl/release/centinela"
-          body: "Release"
-      - name: Cache cargo
-        uses: actions/cache@v3
-        with:
-          path: cargo/
-          key: cargo
-          restore-keys: cargo
+        
+        
       - name: Cache apt
         uses: actions/cache@v3
         with:
           path: apt/
           key: apt
           restore-keys: apt
-      - name: Cache target
+      - name: Cache cargo and target
         uses: actions/cache@v3
         with:
-          path: target/
-          key: target
-          restore-keys: target
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: apt-get update -yq
+      - run: apt-get install -o dir::cache::archives="$APT_CACHE_DIR" -y musl-tools
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: cargo build --target x86_64-unknown-linux-musl --release
+      # Only generate release when running for a tag
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "./target/x86_64-unknown-linux-musl/release/centinela"
+          body: "Release"
+      - name: Upload binary for next job
+        uses: actions/upload-artifact@v4
+        with:
+          name: centinela_temp_binary
+          path: "./target/x86_64-unknown-linux-musl/release/centinela"
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  build_container_and_push:
+    needs: compile
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - uses: actions/download-artifact@v4
+        with:
+          name: centinela_temp_binary
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+#      - uses: webfactory/ssh-agent@v0.9.0
+#        with:
+#          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Fix ref_name
+        run: echo "REF_NAME_SAFE=$(echo '${{github.ref_name}}' | sed -e 's/\//_/' )" >> $GITHUB_ENV
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: "docker/build/Dockerfile"
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.REF_NAME_SAFE }}
+#          ssh: |
+#            default=${{ env.SSH_AUTH_SOCK }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop
+          cache-to: type=inline
