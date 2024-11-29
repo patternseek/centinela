@@ -9,7 +9,7 @@ RUN mkdir /logdata
 COPY ./centinela /app/
 RUN chmod +x /app/centinela
 
-RUN apt install -y ca-certificates
+RUN apt update && apt install -y ca-certificates
 
 ENTRYPOINT /app/centinela /appconf/config.yaml /appdata/data.json
 
