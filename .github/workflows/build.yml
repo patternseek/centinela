@@ -30,11 +30,11 @@ jobs:
           curl -fsSL https://deb.nodesource.com/setup_21.x | bash - &&\
           apt-get install -y nodejs
           
-      # Compile
-          
+          # Compile
+
       - uses: actions/checkout@v4
-        
-        
+
+
       - name: Cache apt
         uses: actions/cache@v3
         with:
@@ -61,10 +61,12 @@ jobs:
         with:
           artifacts: "./target/x86_64-unknown-linux-musl/release/centinela"
           body: "Release"
+      - name: Fix ref_name
+        run: echo "REF_NAME_SAFE=$(echo '${{github.ref_name}}' | sed -e 's/\//_/' )" >> $GITHUB_ENV
       - name: Upload binary for next job
         uses: actions/upload-artifact@v4
         with:
-          name: centinela_temp_binary
+          name: centinela_temp_binary_${{ env.REF_NAME_SAFE }}
           path: "./target/x86_64-unknown-linux-musl/release/centinela"
           if-no-files-found: error
           retention-days: 1
@@ -79,10 +81,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-        
+
+      - name: Fix ref_name
+        run: echo "REF_NAME_SAFE=$(echo '${{github.ref_name}}' | sed -e 's/\//_/' )" >> $GITHUB_ENV
+
       - uses: actions/download-artifact@v4
         with:
-          name: centinela_temp_binary
+          name: centinela_temp_binary_${{ env.REF_NAME_SAFE }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -90,13 +95,12 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      
+      #      - uses: webfactory/ssh-agent@v0.9.0
+      #        with:
+      #          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-#      - uses: webfactory/ssh-agent@v0.9.0
-#        with:
-#          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Fix ref_name
-        run: echo "REF_NAME_SAFE=$(echo '${{github.ref_name}}' | sed -e 's/\//_/' )" >> $GITHUB_ENV
 
       - name: Build and push Docker image
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
@@ -105,7 +109,7 @@ jobs:
           file: "docker/build/Dockerfile"
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.REF_NAME_SAFE }}
-#          ssh: |
-#            default=${{ env.SSH_AUTH_SOCK }}
+          #          ssh: |
+          #            default=${{ env.SSH_AUTH_SOCK }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop
           cache-to: type=inline
