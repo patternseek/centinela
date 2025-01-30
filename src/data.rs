@@ -299,21 +299,30 @@ impl MonitorEvent {
                 .into_iter()
                 .map(|i| {
                     if i.is_event_line {
-                        let wrap = String::from_utf8(vec![
-                            b'-';
+                        let wrap_upper = String::from_utf8(vec![
+                            b'v';
                             if i.to_string().len() < 100 {
                                 i.to_string().len()
                             } else {
                                 100
                             }
                         ])
-                        .expect("Failed to create wrapper text");
+                        .expect("Failed to create upper wrapper text");
+                        let wrap_lower = String::from_utf8(vec![
+                            b'^';
+                            if i.to_string().len() < 100 {
+                                i.to_string().len()
+                            } else {
+                                100
+                            }
+                        ])
+                        .expect("Failed to create lower wrapper text");
                         "\n".to_string()
-                            + wrap.as_str()
+                            + wrap_upper.as_str()
                             + "\n"
                             + i.to_string().as_str()
                             + "\n"
-                            + wrap.as_str()
+                            + wrap_lower.as_str()
                             + "\n"
                     } else {
                         i.to_string()
