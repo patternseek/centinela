@@ -18,6 +18,7 @@ jobs:
       packages: write
     steps:
       - uses: jenskeiner/ghcr-container-repository-cleanup-action@v1
+        if: always()
         with:
           package: ${{ env.IMAGE_NAME }}
           include-tags: ${{ github.event.pull_request.number }}_merge
