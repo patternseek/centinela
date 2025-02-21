@@ -214,7 +214,7 @@ impl FileSet {
                 line: line.line().to_string(),
                 is_event_line: false,
             });
-            while buf.len() > self.max_lines_before {
+            while buf.len() > self.max_lines_before +1  {
                 buf.pop_front();
             }
         }
