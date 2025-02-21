@@ -1,2 +1,8 @@
+.idea
 /target
 /documentation/_build/
+centinela.iml
+config.yaml
+counts.json
+data.json
+
