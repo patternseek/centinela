@@ -37,7 +37,7 @@ impl Monitor {
                         let range_start = if previous_lines.len() >= keep_lines {
                             previous_lines.len() - keep_lines
                         } else {
-                            previous_lines.len()
+                            0
                         };
                         let mut subset = previous_lines
                             .range(range_start..)
